@@ -8,8 +8,12 @@ import (
 	"github.com/tarunjain/agent-history/internal/store"
 )
 
-// ErrAlreadyQueued prevents duplicate paid work for one session.
-var ErrAlreadyQueued = errors.New("analysis is already queued or running")
+var (
+	// ErrAlreadyQueued prevents duplicate paid work for one session.
+	ErrAlreadyQueued = errors.New("analysis is already queued or running")
+	// ErrNoVisibleMessages rejects sessions that contain nothing safe to analyze.
+	ErrNoVisibleMessages = errors.New("session has no visible messages to analyze")
+)
 
 // Worker serializes analysis requests to protect subscription usage.
 type Worker struct {
@@ -47,6 +51,13 @@ func NewWorker(database *store.Store, engine *Engine, queueCapacity int) *Worker
 // Enqueue records queued state and schedules one analysis. The returned channel
 // receives exactly one completion error and is then closed.
 func (w *Worker) Enqueue(ctx context.Context, sessionID string, options Options) (<-chan error, error) {
+	detail, err := w.store.GetSession(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	if len(detail.Messages) == 0 {
+		return nil, ErrNoVisibleMessages
+	}
 	w.mu.Lock()
 	if w.pending[sessionID] {
 		w.mu.Unlock()

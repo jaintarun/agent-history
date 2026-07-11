@@ -7,6 +7,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/tarunjain/agent-history/internal/store"
 )
 
 func TestWorkerSerializesAnalysisRequests(t *testing.T) {
@@ -52,6 +54,31 @@ func TestWorkerSerializesAnalysisRequests(t *testing.T) {
 		if detail.Session.AnalysisStatus != "current" {
 			t.Fatalf("session %q status = %q", id, detail.Session.AnalysisStatus)
 		}
+	}
+}
+
+func TestWorkerRejectsSessionWithoutVisibleMessages(t *testing.T) {
+	database, _ := analysisFixture(t)
+	empty := store.Session{
+		ID: "empty-session", Agent: "claude", NativeSessionID: "empty-native",
+		SourcePath: "/tmp/empty.jsonl", SourceSize: 1, SourceMTime: time.Now(),
+		SourceHash: "empty", WorkingDirectory: "/tmp", StartedAt: time.Now(), LastActiveAt: time.Now(),
+	}
+	if err := database.UpsertSession(context.Background(), empty); err != nil {
+		t.Fatal(err)
+	}
+	worker := NewWorker(database, NewEngine(database, map[string]Analyzer{"tracking": &trackingAnalyzer{}}), 1)
+	t.Cleanup(worker.Close)
+	_, err := worker.Enqueue(context.Background(), empty.ID, Options{Provider: "tracking", Model: "test", PromptVersion: "v1", NormalizerVersion: "v1"})
+	if !errors.Is(err, ErrNoVisibleMessages) {
+		t.Fatalf("empty enqueue error = %v", err)
+	}
+	detail, err := database.GetSession(context.Background(), empty.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail.Session.AnalysisStatus != "none" {
+		t.Fatalf("empty session status = %q", detail.Session.AnalysisStatus)
 	}
 }
 

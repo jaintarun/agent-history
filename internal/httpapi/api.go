@@ -294,6 +294,8 @@ func (h *handler) analyze(response http.ResponseWriter, request *http.Request) {
 	if _, err := h.queue.Enqueue(request.Context(), request.PathValue("id"), options); err != nil {
 		if errors.Is(err, analyze.ErrAlreadyQueued) {
 			writeError(response, http.StatusConflict, "already_queued", err.Error())
+		} else if errors.Is(err, analyze.ErrNoVisibleMessages) {
+			writeError(response, http.StatusUnprocessableEntity, "no_visible_messages", err.Error())
 		} else if errors.Is(err, store.ErrNotFound) {
 			writeError(response, http.StatusNotFound, "not_found", "session not found")
 		} else {
