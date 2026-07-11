@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tarunjain/agent-history/internal/analyze"
 	"github.com/tarunjain/agent-history/internal/source"
 	"github.com/tarunjain/agent-history/internal/store"
 )
@@ -41,7 +43,7 @@ func TestServeHelpDocumentsFlags(t *testing.T) {
 		t.Fatalf("run(serve --help) code = %d, want 0; stderr = %q", code, stderr.String())
 	}
 	help := stdout.String()
-	for _, flag := range []string{"-bind", "-database", "-config", "-open-browser", "-no-open", "-scan-on-start", "-scan-interval"} {
+	for _, flag := range []string{"-bind", "-database", "-config", "-open-browser", "-no-open", "-no-url-token", "-scan-on-start", "-scan-interval", "-analyze-pending"} {
 		if !strings.Contains(help, flag) {
 			t.Errorf("run(serve --help) output missing %q:\n%s", flag, help)
 		}
@@ -112,6 +114,7 @@ func TestServePrintsURLAndStopsCleanly(t *testing.T) {
 	go func() {
 		done <- runContext(ctx, []string{
 			"serve", "--no-open", "--bind", "127.0.0.1:0",
+			"--no-url-token",
 			"--database", databasePath, "--config", configPath,
 			"--scan-on-start=false", "--scan-interval", "0",
 		}, stdoutWriter, &stderr)
@@ -128,7 +131,8 @@ func TestServePrintsURLAndStopsCleanly(t *testing.T) {
 	if code := <-done; code != 0 {
 		t.Fatalf("serve exit code = %d stderr=%s", code, stderr.String())
 	}
-	if !strings.HasPrefix(output, "http://127.0.0.1:") || !strings.Contains(output, "/") {
+	parsed, err := url.Parse(strings.TrimSpace(output))
+	if err != nil || parsed.Hostname() != "127.0.0.1" || parsed.Path != "/" {
 		t.Fatalf("serve output = %q", output)
 	}
 	database, err := store.Open(context.Background(), databasePath)
@@ -144,15 +148,40 @@ func TestServePrintsURLAndStopsCleanly(t *testing.T) {
 	}
 }
 
+func TestEnqueuePendingAnalysesQueuesEachCandidate(t *testing.T) {
+	database := &fakePendingStore{ids: []string{"session-2", "session-1"}}
+	queue := &fakeAnalysisQueue{}
+	options := analyze.Options{Provider: "codex-cli", Model: "test", PromptVersion: "v1", NormalizerVersion: "v1"}
+
+	queued, err := enqueuePendingAnalyses(context.Background(), database, queue, options, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if queued != 2 || strings.Join(queue.ids, ",") != "session-2,session-1" {
+		t.Fatalf("queued=%d ids=%v", queued, queue.ids)
+	}
+	if queue.options.Model != "test" {
+		t.Fatalf("queued options = %#v", queue.options)
+	}
+}
+
 func TestScanLoopRunsStartupAndPeriodicScansUntilCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	scanner := &countingScanner{calls: make(chan struct{}, 3)}
-	done := startScanLoop(ctx, scanner, true, 10*time.Millisecond, nil)
+	afterScans := make(chan struct{}, 3)
+	done := startScanLoop(ctx, scanner, true, 10*time.Millisecond, nil, func(context.Context) {
+		afterScans <- struct{}{}
+	})
 	for range 2 {
 		select {
 		case <-scanner.calls:
 		case <-time.After(time.Second):
 			t.Fatal("scheduled scan did not run")
+		}
+		select {
+		case <-afterScans:
+		case <-time.After(time.Second):
+			t.Fatal("post-scan action did not run")
 		}
 	}
 	cancel()
@@ -170,6 +199,27 @@ type countingScanner struct {
 	calls   chan struct{}
 	active  atomic.Int32
 	maximum atomic.Int32
+}
+
+type fakePendingStore struct {
+	ids []string
+}
+
+func (s *fakePendingStore) PendingAnalysisSessionIDs(context.Context, bool) ([]string, error) {
+	return s.ids, nil
+}
+
+type fakeAnalysisQueue struct {
+	ids     []string
+	options analyze.Options
+}
+
+func (q *fakeAnalysisQueue) Enqueue(_ context.Context, id string, options analyze.Options) (<-chan error, error) {
+	q.ids = append(q.ids, id)
+	q.options = options
+	done := make(chan error)
+	close(done)
+	return done, nil
 }
 
 func (s *countingScanner) Scan(ctx context.Context, _ string) (source.ScanReport, error) {

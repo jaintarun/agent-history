@@ -48,6 +48,25 @@ func TestSecurityMiddleware(t *testing.T) {
 	}
 }
 
+func TestPlainURLHandlerServesRootPaths(t *testing.T) {
+	_, database, scanner, queue, launcher, _ := testHandler(t)
+	handler, err := NewHandler(Config{
+		PlainURL: true, Store: database, Scanner: scanner, Queue: queue,
+		Launcher: launcher, AnalysisDefaults: analyze.Options{
+			Provider: "codex-cli", Model: "test", PromptVersion: "v1", NormalizerVersion: "v1",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response := serve(handler, apiRequest(http.MethodGet, "/api/health", nil)); response.Code != http.StatusOK {
+		t.Fatalf("root health status = %d body=%s", response.Code, response.Body.String())
+	}
+	if response := serve(handler, apiRequest(http.MethodGet, "/test-token/api/health", nil)); response.Code != http.StatusNotFound {
+		t.Fatalf("token-prefixed health status = %d, want 404", response.Code)
+	}
+}
+
 func TestEmbeddedWebApplication(t *testing.T) {
 	handler, _, _, _, _, _ := testHandler(t)
 	tests := []struct {

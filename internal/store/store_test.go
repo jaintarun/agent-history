@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -144,6 +145,44 @@ func TestReplaceAnalysisIsAtomicAndDeletePreservesMessages(t *testing.T) {
 	}
 	if detail.Session.Title != "" || len(detail.Segments) != 0 || len(detail.Messages) != 1 {
 		t.Fatalf("detail after DeleteAnalysis = %#v", detail)
+	}
+}
+
+func TestPendingAnalysisSessionIDsExcludesEmptyCurrentAndFailedSessions(t *testing.T) {
+	database := openTestStore(t)
+	ctx := context.Background()
+	for _, id := range []string{"none", "partial", "failed", "current", "empty"} {
+		session := testSession(id)
+		if err := database.UpsertSession(ctx, session); err != nil {
+			t.Fatal(err)
+		}
+		if id != "empty" {
+			if err := database.ReplaceMessages(ctx, id, []Message{{
+				Sequence: 0, Timestamp: session.StartedAt, Role: "user", Text: "visible",
+			}}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if id != "none" && id != "empty" {
+			if err := database.SetAnalysisStatus(ctx, id, id, ""); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	ids, err := database.PendingAnalysisSessionIDs(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.Join(ids, ","), "none,partial"; got != want {
+		t.Fatalf("PendingAnalysisSessionIDs = %q, want %q", got, want)
+	}
+	ids, err = database.PendingAnalysisSessionIDs(ctx, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.Join(ids, ","), "failed,none,partial"; got != want {
+		t.Fatalf("PendingAnalysisSessionIDs(include failed) = %q, want %q", got, want)
 	}
 }
 

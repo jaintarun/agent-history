@@ -1,4 +1,4 @@
-// Package httpapi exposes the secured loopback JSON API and embedded web UI.
+// Package httpapi exposes the loopback JSON API and embedded web UI.
 package httpapi
 
 import (
@@ -52,6 +52,7 @@ type LaunchResult = launch.Result
 // Config supplies API dependencies and process-local security state.
 type Config struct {
 	Token            string
+	PlainURL         bool
 	Store            *store.Store
 	Scanner          Scanner
 	Queue            AnalysisQueue
@@ -81,10 +82,13 @@ func NewToken() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(value), nil
 }
 
-// NewHandler creates the token-prefixed secured loopback API.
+// NewHandler creates the loopback API, optionally at the unprefixed root.
 func NewHandler(config Config) (http.Handler, error) {
-	if config.Token == "" || strings.Contains(config.Token, "/") {
+	if (!config.PlainURL && config.Token == "") || strings.Contains(config.Token, "/") {
 		return nil, errors.New("httpapi: invalid URL token")
+	}
+	if config.PlainURL && config.Token != "" {
+		return nil, errors.New("httpapi: plain URL cannot use a URL token")
 	}
 	if config.Store == nil {
 		return nil, errors.New("httpapi: store is required")
@@ -92,8 +96,12 @@ func NewHandler(config Config) (http.Handler, error) {
 	if config.Logger == nil {
 		config.Logger = slog.Default()
 	}
+	prefix := ""
+	if config.Token != "" {
+		prefix = "/" + config.Token
+	}
 	h := &handler{
-		token: config.Token, prefix: "/" + config.Token, store: config.Store,
+		token: config.Token, prefix: prefix, store: config.Store,
 		scanner: config.Scanner, queue: config.Queue, launcher: config.Launcher,
 		logger: config.Logger, analysisDefaults: config.AnalysisDefaults,
 		mux: http.NewServeMux(),
@@ -146,7 +154,7 @@ func (h *handler) webAsset(response http.ResponseWriter, name, contentType, cach
 }
 
 func (h *handler) ServeHTTP(response http.ResponseWriter, request *http.Request) {
-	if request.URL.Path != h.prefix && !strings.HasPrefix(request.URL.Path, h.prefix+"/") {
+	if h.prefix != "" && request.URL.Path != h.prefix && !strings.HasPrefix(request.URL.Path, h.prefix+"/") {
 		http.NotFound(response, request)
 		return
 	}

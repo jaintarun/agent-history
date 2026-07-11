@@ -53,9 +53,9 @@ Implement `agent-history` as the smallest useful local application described in
   prompt version, normalizer version, and input hash are analysis provenance.
 - SQLite mutations that span related records are transactional. Enable foreign
   keys on every connection, keep writes short, and use parameterized SQL.
-- Bind HTTP to loopback by default, require the per-process URL token, validate
-  origins for mutations, and never expose credentials or transcript text in
-  normal logs.
+- Bind HTTP to loopback, validate origins for mutations, and never expose
+  credentials or transcript text in normal logs. Require the per-process URL
+  token by default; an explicit tokenless mode may serve only on loopback.
 - Launch requests select only trusted stored resume specifications. Validate
   session IDs and working directories, invoke subprocesses with argv, and never
   accept an arbitrary browser-supplied command or executable.

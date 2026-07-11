@@ -20,12 +20,15 @@ type Server struct {
 	done       chan error
 }
 
-// Start creates the secured handler and starts listening on a loopback address.
+// Start creates the handler and starts listening on a loopback address.
 func Start(ctx context.Context, bind string, config Config) (*Server, error) {
 	if err := validateLoopbackBind(bind); err != nil {
 		return nil, err
 	}
-	if config.Token == "" {
+	if config.PlainURL && config.Token != "" {
+		return nil, errors.New("plain URL cannot use a URL token")
+	}
+	if !config.PlainURL && config.Token == "" {
 		token, err := NewToken()
 		if err != nil {
 			return nil, fmt.Errorf("generate URL token: %w", err)
@@ -94,9 +97,13 @@ func startHandler(ctx context.Context, bind, token string, handler http.Handler)
 	return server, nil
 }
 
-// URL returns the token-prefixed root URL.
+// URL returns the web application root URL.
 func (s *Server) URL() string {
-	return "http://" + s.listener.Addr().String() + "/" + s.token + "/"
+	root := "http://" + s.listener.Addr().String() + "/"
+	if s.token == "" {
+		return root
+	}
+	return root + s.token + "/"
 }
 
 // Done is closed after the listener and in-flight requests stop.

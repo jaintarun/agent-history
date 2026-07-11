@@ -51,6 +51,18 @@ Useful alternatives:
 ./agent-history scan --agent claude
 ```
 
+For the fixed local service used by this repository, run:
+
+```sh
+./run-local.sh
+```
+
+It serves directly at `http://127.0.0.1:54321/`, scans Codex and Claude history
+at startup and every 15 minutes, and serially queues nonempty sessions that are
+unanalyzed or have new activity. A failed analysis is retried once when the
+process starts, but periodic scans do not repeatedly retry failures. Stop the
+foreground process with `Ctrl-C`; run the same script after a reboot.
+
 Run `agent-history serve --help` for bind, database, config, browser, and scan
 flags.
 
@@ -87,7 +99,9 @@ auto = true
 
 After seeding, web settings take precedence. `auto` controls whether analysis
 left queued or running by an unclean exit is requeued at startup; it does not
-analyze every imported session automatically.
+analyze every imported session automatically. The explicit `--analyze-pending`
+serve flag enables that continuous local workflow and consumes Codex
+subscription usage for newly queued work.
 
 The summarizer uses content-addressed sealed leaves, chronological topic nodes,
 and a session rollup. Appending conversation analyzes only new leaves and the
@@ -120,8 +134,9 @@ otherwise the UI returns a safely quoted resume command to copy.
 - Visible user/assistant text is retained verbatim. Tool commands and results
   have fixed retention limits for search and compaction.
 - Transcript content is untrusted data and is never executed during ingestion.
-- The server accepts only loopback binds, requires a random URL token, and
-  validates Host and Origin on mutations.
+- The server accepts only loopback binds, requires a random URL token by
+  default, and validates Host and Origin on mutations. `--no-url-token`
+  explicitly opts into a plain root URL while retaining the loopback bind.
 - Normal logs contain paths, statuses, durations, and aggregate scan counts,
   not transcript text or request bodies.
 - Settings reject secret-like keys and never return inherited credentials.

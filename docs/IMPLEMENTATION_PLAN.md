@@ -285,7 +285,8 @@ handlers or UI are added.
 ### Work
 
 - Start an HTTP server on `127.0.0.1`, using port `0` by default.
-- Generate a random URL token and mount UI/API beneath it.
+- Generate a random URL token and mount UI/API beneath it by default. Permit an
+  explicit tokenless root only while the listener remains on loopback.
 - Add middleware for:
   - request IDs;
   - structured access logs without transcript content;
@@ -303,7 +304,8 @@ handlers or UI are added.
 
 - `httptest` covers success, validation errors, missing sessions, analyzer
   failures, and destructive actions.
-- Requests without the URL token receive 404.
+- Requests without the URL token receive 404 in the default mode; explicit
+  tokenless mode serves the same routes from `/`.
 - Non-loopback Host and invalid Origin requests are rejected.
 - API settings never return secrets or inherited credential values.
 - Cancelling the server drains requests and closes the database cleanly.

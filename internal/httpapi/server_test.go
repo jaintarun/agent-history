@@ -69,3 +69,20 @@ func TestServerUsesTokenAndGracefullyDrainsRequests(t *testing.T) {
 		t.Fatal("server did not stop after request drained")
 	}
 }
+
+func TestServerSupportsPlainRootURL(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	server, err := startHandler(ctx, "127.0.0.1:0", "", http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusNoContent)
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := server.URL(); !strings.HasPrefix(got, "http://127.0.0.1:") || !strings.HasSuffix(got, "/") || strings.Count(strings.TrimPrefix(got, "http://"), "/") != 1 {
+		t.Fatalf("plain server URL = %q", got)
+	}
+	cancel()
+	if err := <-server.Done(); err != nil {
+		t.Fatal(err)
+	}
+}

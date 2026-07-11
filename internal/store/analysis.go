@@ -125,6 +125,39 @@ func (s *Store) SetAnalysisStatus(ctx context.Context, sessionID, status, messag
 	return nil
 }
 
+// PendingAnalysisSessionIDs returns nonempty sessions that have not been
+// analyzed or have new imported activity. includeFailed supports one bounded
+// retry at process startup without retrying failures after every periodic scan.
+func (s *Store) PendingAnalysisSessionIDs(ctx context.Context, includeFailed bool) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `
+        SELECT sessions.id
+        FROM sessions
+        WHERE (
+              sessions.analysis_status IN ('none', 'partial')
+              OR (? AND sessions.analysis_status = 'failed')
+          )
+          AND EXISTS (
+              SELECT 1 FROM messages WHERE messages.session_id = sessions.id
+          )
+        ORDER BY sessions.last_active_at DESC, sessions.id`, includeFailed)
+	if err != nil {
+		return nil, fmt.Errorf("list pending analysis sessions: %w", err)
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan pending analysis session: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list pending analysis sessions: %w", err)
+	}
+	return ids, nil
+}
+
 // RecoverAnalysisStates resets jobs left queued or running by an unclean exit.
 // It returns the affected session IDs so an auto-analysis caller can requeue
 // them after the transaction commits.

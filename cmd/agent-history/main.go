@@ -80,8 +80,10 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 	configPath := flags.String("config", defaults.Config, "path to the configuration file")
 	openBrowserFlag := flags.Bool("open-browser", defaults.OpenBrowser, "open the web application in the default browser")
 	noOpen := flags.Bool("no-open", false, "do not open a browser; print the web application URL")
+	noURLToken := flags.Bool("no-url-token", false, "serve directly at / without a URL token (loopback only)")
 	scanOnStart := flags.Bool("scan-on-start", true, "scan transcript sources when the server starts")
 	scanInterval := flags.Duration("scan-interval", defaults.ScanInterval, "interval between transcript scans (0 disables periodic scans)")
+	analyzePending := flags.Bool("analyze-pending", false, "queue nonempty unanalyzed and updated sessions at startup and after scans")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
@@ -153,7 +155,7 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 	logger := slog.New(slog.NewTextHandler(stderr, nil))
 	server, err := httpapi.Start(ctx, *bind, httpapi.Config{
 		Store: database, Scanner: scanner, Queue: worker, Launcher: launcher, Logger: logger,
-		AnalysisDefaults: options,
+		AnalysisDefaults: options, PlainURL: *noURLToken,
 	})
 	if err != nil {
 		worker.Close()
@@ -169,10 +171,30 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 			logger.Error("could not requeue stale analysis", "session_id", sessionID, "error", err)
 		}
 	}
+	queuePending := func(queueContext context.Context, includeFailed bool) {
+		queued, err := enqueuePendingAnalyses(queueContext, database, worker, options, includeFailed)
+		if err != nil && queueContext.Err() == nil {
+			logger.Error("could not queue all pending analyses", "queued", queued, "error", err)
+		} else if queued > 0 {
+			logger.Info("pending analyses queued", "queued", queued)
+		}
+	}
+	pendingQueued := false
+	if *analyzePending && !*scanOnStart {
+		queuePending(ctx, true)
+		pendingQueued = true
+	}
 
 	fmt.Fprintln(stdout, server.URL())
 	scanContext, stopScans := context.WithCancel(ctx)
-	scanDone := startScanLoop(scanContext, scanner, *scanOnStart, *scanInterval, logger)
+	var afterScan func(context.Context)
+	if *analyzePending {
+		afterScan = func(scanContext context.Context) {
+			queuePending(scanContext, !pendingQueued)
+			pendingQueued = true
+		}
+	}
+	scanDone := startScanLoop(scanContext, scanner, *scanOnStart, *scanInterval, logger, afterScan)
 	if *openBrowserFlag && !*noOpen {
 		if err := openBrowser(server.URL()); err != nil {
 			logger.Warn("could not open browser", "error", err)
@@ -218,7 +240,34 @@ type scanService interface {
 	Scan(context.Context, string) (source.ScanReport, error)
 }
 
-func startScanLoop(ctx context.Context, scanner scanService, startup bool, interval time.Duration, logger *slog.Logger) <-chan struct{} {
+type pendingAnalysisStore interface {
+	PendingAnalysisSessionIDs(context.Context, bool) ([]string, error)
+}
+
+type analysisQueue interface {
+	Enqueue(context.Context, string, analyze.Options) (<-chan error, error)
+}
+
+func enqueuePendingAnalyses(ctx context.Context, database pendingAnalysisStore, queue analysisQueue, options analyze.Options, includeFailed bool) (int, error) {
+	ids, err := database.PendingAnalysisSessionIDs(ctx, includeFailed)
+	if err != nil {
+		return 0, err
+	}
+	queued := 0
+	var queueErrors []error
+	for _, id := range ids {
+		if _, err := queue.Enqueue(ctx, id, options); err != nil {
+			if !errors.Is(err, analyze.ErrAlreadyQueued) {
+				queueErrors = append(queueErrors, fmt.Errorf("queue session %s: %w", id, err))
+			}
+			continue
+		}
+		queued++
+	}
+	return queued, errors.Join(queueErrors...)
+}
+
+func startScanLoop(ctx context.Context, scanner scanService, startup bool, interval time.Duration, logger *slog.Logger, afterScan func(context.Context)) <-chan struct{} {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -233,6 +282,9 @@ func startScanLoop(ctx context.Context, scanner scanService, startup bool, inter
 			}
 			if logger != nil {
 				logger.Info("history scan complete", "discovered", report.Discovered, "imported", report.Imported, "metadata_only", report.MetadataOnly, "skipped", report.Skipped, "duration_ms", time.Since(started).Milliseconds())
+			}
+			if afterScan != nil {
+				afterScan(ctx)
 			}
 		}
 		if startup {

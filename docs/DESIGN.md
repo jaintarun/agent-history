@@ -116,6 +116,11 @@ and opens the default browser. `--no-open` prints the URL without opening it.
 Static HTML, CSS, and JavaScript are embedded with `go:embed`; running the
 application does not require Node.js or a separate frontend server.
 
+For a trusted single-user machine, an explicit `--no-url-token` mode may mount
+the same application at `/`; loopback binding, Host validation, and mutation
+Origin validation remain mandatory. `--analyze-pending` queues nonempty new or
+updated sessions after scans while keeping model work serialized.
+
 ### Primary view
 
 The main screen is a dense search/detail split view:
