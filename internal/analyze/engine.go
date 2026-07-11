@@ -316,15 +316,7 @@ func (s *runState) summarizeTopics(ctx context.Context, topics []topicPlan) ([]T
 
 func (s *runState) rollupItems(ctx context.Context, kind RequestKind, position int, items []summaryItem) (summaryItem, store.SummaryNode, error) {
 	start, end := items[0].start, items[len(items)-1].end
-	payload := make([]map[string]any, 0, len(items))
-	for _, item := range items {
-		payload = append(payload, map[string]any{
-			"start_sequence": item.start, "end_sequence": item.end,
-			"title": item.title, "summary": item.summary, "detail": item.detail,
-			"evidence": item.evidence,
-		})
-	}
-	input, err := json.Marshal(payload)
+	input, err := marshalSummaryItems(items)
 	if err != nil {
 		return summaryItem{}, store.SummaryNode{}, err
 	}
@@ -341,6 +333,18 @@ func (s *runState) rollupItems(ctx context.Context, kind RequestKind, position i
 		} else if !errors.Is(err, store.ErrNotFound) {
 			return summaryItem{}, store.SummaryNode{}, err
 		}
+	}
+	if len(items) == 1 {
+		summary := rollupSummary{
+			Title: items[0].title, Summary: items[0].summary,
+			Detail: items[0].detail, Evidence: items[0].evidence,
+		}
+		raw, err := json.Marshal(summary)
+		if err != nil {
+			return summaryItem{}, store.SummaryNode{}, err
+		}
+		node := s.newNode(nodeKind, position, start, end, inputHash, raw, true)
+		return itemFromRollup(start, end, summary, raw), node, nil
 	}
 	raw, err := s.generate(ctx, kind, rollupPrompt(kind, input))
 	if err != nil {
@@ -372,6 +376,14 @@ func (s *runState) summarizeSession(ctx context.Context, topics []TopicResult) (
 			return sessionSummary{}, store.SummaryNode{}, err
 		}
 	}
+	if len(topics) == 1 {
+		summary := sessionSummary{Title: topics[0].Title, Summary: topics[0].Summary}
+		raw, err := json.Marshal(summary)
+		if err != nil {
+			return sessionSummary{}, store.SummaryNode{}, err
+		}
+		return summary, s.newNode("session", 0, start, end, inputHash, raw, true), nil
+	}
 	raw, err := s.generate(ctx, RequestSession, sessionPrompt(input))
 	if err != nil {
 		return sessionSummary{}, store.SummaryNode{}, err
@@ -381,6 +393,18 @@ func (s *runState) summarizeSession(ctx context.Context, topics []TopicResult) (
 		return sessionSummary{}, store.SummaryNode{}, fmt.Errorf("validate session rollup: %w", err)
 	}
 	return summary, s.newNode("session", 0, start, end, inputHash, raw, true), nil
+}
+
+func marshalSummaryItems(items []summaryItem) ([]byte, error) {
+	payload := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		payload = append(payload, map[string]any{
+			"start_sequence": item.start, "end_sequence": item.end,
+			"title": item.title, "summary": item.summary, "detail": item.detail,
+			"evidence": item.evidence,
+		})
+	}
+	return json.Marshal(payload)
 }
 
 func (s *runState) generate(ctx context.Context, kind RequestKind, prompt string) (json.RawMessage, error) {

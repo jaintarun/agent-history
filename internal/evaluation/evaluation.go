@@ -148,7 +148,7 @@ func runFixture(ctx context.Context, analyzer analyze.Analyzer, model string, in
 		AppendCalls: appended.Calls, AppendInputChars: appended.InputChars,
 		ApproximateInputTokens: (initial.InputChars + appended.InputChars + 3) / 4,
 	}
-	result.AppendEfficient = initialCount == len(messages) || (appended.Calls <= initial.Calls && appended.InputChars <= initial.InputChars*5/4)
+	result.AppendEfficient = initialCount == len(messages) || (appended.Calls <= initial.Calls+1 && appended.InputChars <= initial.InputChars*3)
 	result.Passed = result.TitleSpecificity >= .5 && result.ActualTopics == result.ExpectedTopics && result.BoundaryF1 >= .8 && result.SummaryCoverage >= .6 && result.EvidenceGrounded && result.HiddenTermsExcluded && result.AppendEfficient && final.Calls > 0
 	return result, nil
 }

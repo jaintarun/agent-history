@@ -26,8 +26,8 @@ func TestEngineBuildsThreeLevelsAndReusesUnaffectedTree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Calls != 5 {
-		t.Fatalf("initial analyzer calls = %d, want 5", result.Calls)
+	if result.Calls != 3 {
+		t.Fatalf("initial analyzer calls = %d, want 3", result.Calls)
 	}
 	detail, err := database.GetSession(context.Background(), session.ID)
 	if err != nil {
@@ -74,6 +74,43 @@ func TestEngineBuildsThreeLevelsAndReusesUnaffectedTree(t *testing.T) {
 		if strings.Contains(request.Prompt, "Fix authentication") || strings.Contains(request.Prompt, "redesign the vault") {
 			t.Fatalf("append request resent sealed raw history in %s prompt:\n%s", request.Kind, request.Prompt)
 		}
+	}
+}
+
+func TestEnginePromotesSingleLeafWithoutRedundantModelCalls(t *testing.T) {
+	database, session := analysisFixture(t)
+	messages := analysisMessages()[:2]
+	session.SourceHash = "single-topic"
+	session.LastActiveAt = messages[len(messages)-1].Timestamp
+	if _, err := database.ImportSession(context.Background(), session, messages); err != nil {
+		t.Fatal(err)
+	}
+	fake := &fakeAnalyzer{}
+	engine := NewEngine(database, map[string]Analyzer{"fake": fake})
+	result, err := engine.Analyze(context.Background(), session.ID, Options{
+		Provider: "fake", Model: "test", PromptVersion: "v1",
+		NormalizerVersion: "v2", LeafTargetChars: 48_000, RollupFanout: 8,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Calls != 1 || len(result.Analysis.Topics) != 1 || result.Analysis.Title != "Leaf" {
+		t.Fatalf("single-leaf result = %#v", result)
+	}
+	detail, err := database.GetSession(context.Background(), session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodeCount := 0
+	for _, kind := range []string{"leaf", "topic", "session"} {
+		nodes, err := database.SummaryNodes(context.Background(), session.ID, kind, "fake", "test", "v1", "v2")
+		if err != nil {
+			t.Fatal(err)
+		}
+		nodeCount += len(nodes)
+	}
+	if len(detail.Segments) != 1 || nodeCount != 3 {
+		t.Fatalf("persisted segments/nodes = %d/%d", len(detail.Segments), nodeCount)
 	}
 }
 
@@ -161,8 +198,8 @@ func TestEngineModelChangeInvalidatesCache(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Calls != 5 {
-		t.Fatalf("new-model calls = %d, want full tree 5", result.Calls)
+	if result.Calls != 3 {
+		t.Fatalf("new-model calls = %d, want full tree 3", result.Calls)
 	}
 }
 
