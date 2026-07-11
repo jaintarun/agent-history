@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/tarunjain/agent-history/internal/source"
+	"github.com/tarunjain/agent-history/internal/source/claude"
 	"github.com/tarunjain/agent-history/internal/source/codex"
 	"github.com/tarunjain/agent-history/internal/store"
 
@@ -109,6 +110,42 @@ func TestCodexScanIsIdempotentAndInvalidatesOnlyChangedSuffix(t *testing.T) {
 	}
 }
 
+func TestMixedCodexAndClaudeScanUsesNormalizedStore(t *testing.T) {
+	ctx := context.Background()
+	codexHome := t.TempDir()
+	claudeHome := t.TempDir()
+	codexPath := filepath.Join(codexHome, "sessions", "2026", "07", "rollout.jsonl")
+	claudePath := filepath.Join(claudeHome, "projects", "-Users-example-work", "session.jsonl")
+	copyFile(t, filepath.Join("codex", "testdata", "basic.jsonl"), codexPath)
+	copyFile(t, filepath.Join("claude", "testdata", "basic.jsonl"), claudePath)
+
+	database, err := store.Open(ctx, filepath.Join(t.TempDir(), "history.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	scanner := source.NewScanner(database, codex.New(codexHome), claude.New(claudeHome))
+	report, err := scanner.Scan(ctx, "all")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Discovered != 2 || report.Imported != 2 {
+		t.Fatalf("mixed scan report = %#v", report)
+	}
+
+	codexID := source.StableID("codex", "11111111-1111-4111-8111-111111111111")
+	claudeID := source.StableID("claude", "55555555-5555-4555-8555-555555555555")
+	for id, wantAgent := range map[string]string{codexID: "codex", claudeID: "claude"} {
+		detail, err := database.GetSession(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if detail.Session.Agent != wantAgent || len(detail.Messages) == 0 {
+			t.Fatalf("session %q = agent %q, messages %d", id, detail.Session.Agent, len(detail.Messages))
+		}
+	}
+}
+
 func assertNoFTSMatch(t *testing.T, databasePath, query string) {
 	t.Helper()
 	db, err := sql.Open("sqlite", databasePath)
@@ -137,6 +174,20 @@ func touchFuture(t *testing.T, path string) {
 	t.Helper()
 	now := time.Now().Add(time.Second)
 	if err := os.Chtimes(path, now, now); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func copyFile(t *testing.T, sourcePath, destination string) {
+	t.Helper()
+	content, err := os.ReadFile(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(destination, content, 0o600); err != nil {
 		t.Fatal(err)
 	}
 }

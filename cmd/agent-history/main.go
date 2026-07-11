@@ -10,6 +10,7 @@ import (
 
 	"github.com/tarunjain/agent-history/internal/config"
 	"github.com/tarunjain/agent-history/internal/source"
+	"github.com/tarunjain/agent-history/internal/source/claude"
 	"github.com/tarunjain/agent-history/internal/source/codex"
 	"github.com/tarunjain/agent-history/internal/store"
 )
@@ -91,7 +92,10 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 	}
 	defer database.Close()
 
-	scanner := source.NewScanner(database, codex.New(codex.DefaultHome()))
+	scanner := source.NewScanner(database,
+		codex.New(codex.DefaultHome()),
+		claude.New(claude.DefaultHome()),
+	)
 	report, err := scanner.Scan(context.Background(), *agent)
 	if err != nil {
 		fmt.Fprintf(stderr, "agent-history scan: %v\n", err)

@@ -1,0 +1,3 @@
+{"type":"user","sessionId":"66666666-6666-4666-8666-666666666666","cwd":"/Users/example/work/ui","timestamp":"2026-07-04T10:00:00Z","message":{"role":"user","content":"Fix the narrow layout."}}
+{"type":"assistant","sessionId":"66666666-6666-4666-8666-666666666666","cwd":"/Users/example/work/ui","timestamp":"2026-07-04T10:01:00Z","message":{"role":"assistant","content":[{"type":"text","text":"The layout now stacks."}]}}
+{"type":"assistant","sessionId":"66666666-6666-4666-8666-666666666666","timestamp":"2026-07-04T10:02:00Z","message":{"content":[
