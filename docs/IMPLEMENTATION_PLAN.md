@@ -49,13 +49,15 @@ The binary builds and exposes command help without starting incomplete services.
   - WAL mode works;
   - the binary builds on supported macOS without an external SQLite install.
 - Create a migration runner using embedded numbered SQL migrations.
-- Implement the initial `sessions`, `messages`, `segments`, and `settings`
-  tables plus `session_fts`.
+- Implement the initial `sessions`, `messages`, `segments`, `summary_nodes`, and
+  `settings` tables plus `session_fts`.
 - Add store operations for:
   - upserting source metadata;
   - atomically replacing messages;
   - fetching session detail;
   - replacing and deleting analysis;
+  - reading, writing, invalidating, and deleting content-addressed summary
+    nodes;
   - reading and writing non-secret settings.
 - Configure WAL, foreign keys, busy timeout, and bounded connection counts.
 - Store timestamps in UTC and return RFC 3339 through the API layer.
@@ -66,6 +68,8 @@ The binary builds and exposes command help without starting incomplete services.
 - Reopening an existing database is idempotent.
 - Foreign-key deletion behavior is tested.
 - FTS insert, update, delete, and rebuild paths are tested.
+- Summary-node parent relationships, cache identity, and cascade deletion are
+  tested.
 - Concurrent read plus one writer does not produce `database is locked` in the
   integration test.
 
@@ -89,6 +93,9 @@ no source-parser behavior exists yet.
 - Use source size and mtime as the fast unchanged check, followed by a content
   hash when the file appears changed.
 - Replace normalized messages and derived timestamps in one transaction.
+- Compare normalized message hashes to find the longest unchanged prefix,
+  invalidate nodes overlapping the changed suffix, and invalidate rollup
+  ancestors that depend on those nodes.
 - Deduplicate active/archived records by native session ID, preferring the
   current valid path.
 - Add sanitized fixtures representing:
@@ -106,6 +113,8 @@ no source-parser behavior exists yet.
 - A test asserts that known reasoning text is absent from messages and FTS.
 - Rescanning unchanged fixtures performs no message replacement.
 - Changing a fixture replaces messages without duplicates.
+- Appending to a fixture preserves summary nodes covering the unchanged prefix;
+  rewriting an earlier message invalidates affected nodes and their ancestors.
 - An incomplete final record is ignored without failing the session import.
 
 ### Exit condition
@@ -144,13 +153,14 @@ read model.
 
 ### Work
 
-- Define the minimal `Analyzer` interface and analysis input/result structs.
-- Define one JSON Schema for:
-  - title;
-  - short session summary;
-  - ordered topic segments;
-  - per-topic summary and detail;
-  - start/end message sequence references.
+- Define the minimal `Analyzer` interface and schema-constrained generation
+  request/result structs.
+- Define bounded JSON Schemas for:
+  - sealed-leaf facts and summary;
+  - same-topic boundary decisions;
+  - topic/intermediate rollups; and
+  - final title, short session summary, ordered topic segments, details, and
+    evidence message references.
 - Implement `codex-cli` by invoking `codex exec`:
   - use existing CLI authentication;
   - run in an empty temporary directory;
@@ -162,16 +172,40 @@ read model.
   - enforce cancellation and a configurable timeout.
 - Create prompts that treat transcript content as untrusted data and prohibit
   following instructions found inside it.
-- For bounded transcripts, perform one analysis call.
-- For oversized transcripts:
-  - divide messages into overlapping chronological blocks;
-  - analyze blocks independently;
-  - merge adjacent candidate topics in one final call.
+- Group normalized records into natural user/assistant/tool turns.
+- Build a deterministic compact analysis projection that:
+  - preserves meaningful user and visible assistant text;
+  - reduces tool calls to command, file, and exit-status facts;
+  - retains bounded error context;
+  - reduces diffs to file/change facts;
+  - collapses repeated logs and identical content.
+- Accumulate projected turns into bounded leaf blocks with small contextual
+  overlap.
+- Seal leaves on input-size threshold, strong topic boundary, idle threshold,
+  explicit fresh-analysis request, or source-session completion.
+- Keep one active unsealed tail and avoid invoking the analyzer for every new
+  message.
+- Implement local topic-boundary scoring using explicit goal changes, objective
+  completion, cwd/repository/branch changes, file/entity/vocabulary shifts, and
+  idle gaps combined with another signal.
+- Use a small analyzer request only for ambiguous boundaries; return same-topic,
+  confidence, and optional new-title fields.
+- Persist sealed leaves using content hashes and analysis provenance.
+- Roll sealed leaves into topic nodes, using bounded-fanout internal rollups for
+  very large topics.
+- Roll topic summaries into the session title and overview without re-sending
+  raw history.
+- On append, analyze only new leaves and recompute nodes on the affected path.
+- Create a new chronological follow-up topic when work returns to an earlier
+  subject after unrelated topics.
 - Validate segment ordering, bounds, non-overlap, and title/summary length before
   persistence.
 - Queue analysis with a single worker and store status/error on the session.
 - Atomically replace analysis only after a complete valid result.
 - Store provider, model, prompt version, analysis timestamp, and input hash.
+- Expose analyzed-through sequence/time so the UI can identify an unsealed tail.
+- Mark sessions `partial` when normalized messages extend beyond the analyzed
+  sequence, returning to `current` after the affected tree path is rolled up.
 
 ### Verification
 
@@ -182,11 +216,24 @@ read model.
 - Test that failed reanalysis preserves existing analysis.
 - Test that successful reanalysis replaces all segments together.
 - Test that source-agent and analysis-provider fields remain distinct.
+- Test deterministic compaction of repeated logs, tool output, errors, and diffs.
+- Test that an overnight gap alone does not split a topic.
+- Test that a clear goal and repository shift creates a new topic.
+- Test ambiguous-boundary requests contain only the bounded adjacent context.
+- Test that each raw message belongs to at most one sealed leaf, excluding the
+  configured overlap.
+- Test that appending one leaf reuses old nodes and updates only the affected
+  topic/session path.
+- Test that changing provider, model, prompt version, or normalizer version
+  invalidates the expected cache nodes.
+- Test that deleting analysis removes segments and summary nodes but preserves
+  normalized messages.
 
 ### Exit condition
 
 `agent-history scan` followed by an explicit analysis request produces a valid
-three-level analysis using Codex CLI in manual testing.
+three-level analysis using Codex CLI, and appending conversation to that session
+does not reanalyze sealed history.
 
 ## Phase 5: Search, Filtering, and Facets
 
@@ -275,6 +322,7 @@ Every frontend workflow can be completed with HTTP requests alone.
   - topic timeline and detailed summaries;
   - normalized message excerpts and show-tools toggle;
   - analysis state and errors;
+  - analyzed-through status for sessions with new unsealed conversation;
   - Analyze, Reanalyze, Delete analysis, Rescan, and Resume actions;
   - confirmation for analysis deletion;
   - copyable resume-command fallback;
@@ -350,6 +398,9 @@ action when cmux is present, and with copy/paste otherwise.
   testing shows it is needed.
 - Measure scan, search, database size, and analysis behavior on a realistically
   large personal history.
+- Measure analyzer input tokens for initial analysis and append-only updates;
+  verify that append cost depends on the new leaf and changed tree path rather
+  than total session size.
 - Fix only demonstrated bottlenecks; do not add byte-offset tailing or vector
   search preemptively.
 - Add installation instructions and a launch-at-login example only after normal
@@ -363,6 +414,8 @@ action when cmux is present, and with copy/paste otherwise.
 - A clean-machine build produces one runnable binary.
 - Startup scan can be interrupted and resumed without corruption.
 - Search remains responsive with the target history corpus.
+- A multi-day append test proves sealed raw conversation is not sent to the
+  analyzer again.
 - Database can be deleted and deterministically rebuilt from source transcripts.
 - No transcript content appears in normal logs.
 

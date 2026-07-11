@@ -55,6 +55,14 @@ on a small Go interface so a Claude CLI or HTTP provider can be added later.
 There is one global default provider and model, with an optional per-request
 override.
 
+### Incremental analysis
+
+Long-running sessions must not be summarized from the beginning whenever new
+messages arrive. Raw conversation is summarized into sealed, content-addressed
+nodes. An append analyzes only the new conversation and recomputes the affected
+path through the summary tree. Complete reanalysis remains an explicit user
+action or a consequence of changing the model, prompt, or normalizer version.
+
 ### No hidden execution
 
 Transcript ingestion never executes transcript content. Analysis runs without
@@ -73,6 +81,7 @@ only invoke a resume specification created by a trusted source adapter.
 - Store session metadata and normalized messages in SQLite.
 - Generate a session title, short summary, topic segments, and detailed segment
   summaries.
+- Incrementally reuse sealed summaries as sessions continue over multiple days.
 - Search with SQLite FTS5.
 - Filter by agent, last-active date, custom date range, working directory,
   focused/multiple-topic status, and analysis state.
@@ -158,13 +167,15 @@ The detail view exposes only the core actions:
                               /             \
                     analysis worker       search queries
                           |                      |
-                    analyzer adapter          HTTP API
+              turn builder + compactor        HTTP API
                           |                      |
-                      Codex CLI          embedded web UI
-                                                |
-                                          launcher adapter
-                                          /              \
-                                        cmux         copy command
+              boundary scorer + summary tree   |
+                          |                      |
+                    analyzer adapter     embedded web UI
+                          |                      |
+                      Codex CLI          launcher adapter
+                                               /       \
+                                             cmux   copy command
 ```
 
 ### Source adapters
@@ -190,6 +201,12 @@ Discovery records path, size, modification time, and native session ID. An
 unchanged file is skipped. A changed file is parsed completely and its messages
 are replaced in one transaction. Full-file replacement is intentionally simpler
 than byte-offset tailing and correctly handles transcript rewrites.
+
+Before replacement, the importer compares normalized message hashes to find the
+longest unchanged prefix. A normal append preserves every sealed summary node
+whose range is inside that prefix. A rewrite invalidates nodes overlapping the
+changed suffix plus rollup ancestors that depend on them. This keeps local
+ingestion simple while avoiding repeated model work for unchanged history.
 
 ### Normalization
 
@@ -217,21 +234,49 @@ The normalizer discards:
 Filtering is verified with provider-specific fixtures so hidden content cannot
 silently enter analysis prompts or search results.
 
+### Turns and analysis projection
+
+The analysis worker groups normalized records into natural turns: one user
+request, the visible assistant response around it, related tool activity, and
+the resulting assistant conclusion. Topic boundaries are never created merely
+because midnight or an idle timeout occurred.
+
+The worker then builds a compact analysis projection without changing the
+stored conversation:
+
+- preserve meaningful user messages and visible assistant text;
+- reduce tool calls to command, file, and exit-status facts;
+- keep error lines with bounded surrounding context;
+- reduce diffs to files and change statistics unless their text is directly
+  discussed;
+- collapse repeated log lines and identical content; and
+- replace repeated material with a count and content reference.
+
+SQLite and FTS retain the normalized visible text. The compact projection is
+used only as model input, so token reduction does not weaken exact transcript
+search.
+
 ### Analysis
 
 The analyzer contract is intentionally small:
 
 ```go
 type Analyzer interface {
-    Analyze(
+    Generate(
         context.Context,
         string, // model
-        AnalysisInput,
-    ) (AnalysisResult, error)
+        StructuredRequest,
+    ) (json.RawMessage, error)
 }
 ```
 
-`AnalysisResult` contains:
+`StructuredRequest` supplies the bounded prompt input and JSON Schema. The
+analysis pipeline, not the provider adapter, decodes that output into typed leaf
+summaries, boundary decisions, topic rollups, or session rollups. This keeps
+Codex-, Claude-, and HTTP-specific authentication and process behavior separate
+from summary-tree policy.
+
+The user-visible `AnalysisResult` contains:
 
 ```text
 title
@@ -250,19 +295,92 @@ sandbox, receives the conversation through stdin, and validates the result with
 a JSON Schema. The application does not extract or reuse Codex authentication
 tokens.
 
-For transcripts too large for one request, the service divides messages into
-bounded chronological blocks, analyzes each block, then performs one merge call
-over the candidate topics. All stages use the same configured model initially.
+#### Sealed leaf blocks
+
+Compacted turns accumulate into bounded leaf blocks sized for the configured
+model. A leaf is sealed when it reaches its input target, a strong topic boundary
+is detected, the session becomes idle, or the source session ends. A continuously
+running agent therefore seals by size even when it never becomes idle.
+
+Each sealed leaf records its message range, input hash, compact structured
+summary, entities, goal, outcome, important files and errors, and analysis
+provenance. Sealed leaves are immutable while their input hash and configuration
+remain unchanged. In normal operation, each raw message is included in at most
+one sealed leaf analysis, apart from a small overlap used to preserve context.
+
+The current tail remains unsealed. The service does not invoke Codex after every
+message. It analyzes the tail after a size threshold, an idle period, an explicit
+request for fresh analysis, or a strong boundary. The API reports how far the
+analysis is current so the UI can distinguish fresh analysis from new queued
+conversation.
+
+#### Topic boundary detection
+
+Boundary detection is local by default. It scores evidence such as:
+
+- an explicit new goal in a user message;
+- completion of the previous objective;
+- a repository, cwd, or branch change;
+- a substantial shift in files, commands, named entities, or vocabulary; and
+- an idle gap combined with another topic-shift signal.
+
+An idle gap alone never splits a topic. A two-day goal-oriented task may remain
+one topic, while a session reused for unrelated work becomes multiple
+chronological topics.
+
+Only ambiguous boundaries use the analyzer. That request contains the current
+topic title and goal plus small excerpts immediately before and after the
+candidate boundary. It returns a same-topic decision, confidence, and optional
+new topic title rather than re-reading the transcript.
+
+#### Incremental summary tree
+
+Sealed leaves roll into user-visible topic nodes. Topic summaries roll into the
+session title and overview. Very large topics may use fixed-fanout intermediate
+rollup nodes, but those nodes are internal and do not add UI hierarchy.
+
+```text
+Session overview
+├── Authentication topic
+│   ├── sealed leaf: reproduce failure
+│   ├── sealed leaf: inspect token refresh
+│   └── sealed leaf: implement and test fix
+├── Vault research topic
+│   ├── sealed leaf: inspect storage
+│   └── sealed leaf: evaluate extension paths
+└── History-service topic
+    ├── sealed leaf: define data model
+    └── active leaf: design filtering
+```
+
+Appending one leaf normally requires one leaf analysis, one affected-topic
+rollup, and one session rollup. Only the leaf request contains new raw
+conversation; parent requests contain compact child summaries. Work grows with
+the new conversation and the changed tree path rather than total session size.
+
+The visible hierarchy remains exactly three generated levels:
+
+1. session title and overview;
+2. chronological topic chapters; and
+3. detailed topic summaries with evidence message references.
+
+If work returns to an earlier subject after unrelated chapters, create and title
+a new chronological follow-up topic rather than rewriting history.
 
 Reanalysis is atomic:
 
-1. Generate and validate replacement analysis outside the write transaction.
+1. Generate and validate replacement nodes outside the user-visible write
+   transaction.
 2. Begin a transaction.
-3. Replace the session title, summary, and segments.
+3. Replace the session title, summary, segments, and active analysis generation.
 4. Update the analyzed content hash and provenance.
-5. Commit.
+5. Commit and remove superseded internal nodes.
 
 If generation fails, the previous analysis remains visible.
+
+Normal appends use the incremental path. Explicit reanalysis with a different
+model, prompt version, or normalizer version intentionally rebuilds the tree.
+Deleting analysis removes segments and summary nodes but preserves messages.
 
 ### Model switching
 
@@ -291,9 +409,13 @@ analyzed_hash
 The transcript source agent and analysis provider are separate. For example, a
 Claude transcript may be summarized by `codex-cli`.
 
+Leaf-size, overlap, idle, boundary-confidence, and rollup-fanout values start as
+tested internal defaults rather than user-facing knobs. Promote one to a setting
+only when real histories demonstrate a need to tune it.
+
 ### SQLite model
 
-The initial schema has four ordinary tables and one FTS5 virtual table.
+The initial schema has five ordinary tables and one FTS5 virtual table.
 
 #### `sessions`
 
@@ -311,13 +433,15 @@ summary               generated short summary, nullable
 topic_count           generated topic count, nullable
 started_at            first meaningful event
 last_active_at        last meaningful event
-analysis_status       none, queued, running, complete, failed
+analysis_status       none, queued, running, current, partial, failed
 analysis_error        last failure, nullable
 analysis_provider     nullable
 analysis_model        nullable
 analysis_prompt_version nullable
 analyzed_at           nullable
 analyzed_hash         nullable
+analyzed_through_sequence nullable
+analyzed_through_at   nullable
 created_at
 updated_at
 ```
@@ -347,6 +471,35 @@ title
 summary
 detail
 ```
+
+`segments` are the topic chapters shown to users. Internal leaf and rollup nodes
+do not appear as additional topics.
+
+#### `summary_nodes`
+
+```text
+id
+session_id
+parent_id             nullable
+kind                  leaf, rollup, topic, session
+position
+start_sequence
+end_sequence
+input_hash
+summary_json
+sealed
+provider
+model
+prompt_version
+normalizer_version
+created_at
+updated_at
+```
+
+The effective cache identity is the input hash plus provider, model, prompt
+version, and normalizer version. Nodes whose cache identity and message range
+remain valid are reused. This table is an optimization structure, not analysis
+history: superseded nodes are deleted after a successful replacement.
 
 #### `settings`
 
@@ -416,6 +569,7 @@ still supporting:
 - keyboard navigation through results;
 - an accessible desktop split view and stacked narrow layout;
 - topic expansion and message excerpts;
+- analysis-current-through status when a live session has an unsealed tail;
 - analysis progress and errors; and
 - explicit destructive-action confirmation.
 
@@ -492,6 +646,9 @@ All paths are configurable through flags for tests and alternate installations.
 - Scan on a configurable interval while serving.
 - Allow manual global scan and per-session rescan.
 - Use a single analysis worker by default to protect subscription usage.
+- Seal analysis leaves by size or idle threshold rather than summarizing every
+  message.
+- Reuse unchanged summary nodes and recompute only the affected tree path.
 - Recover sessions left in `queued` or `running` state after an unclean exit by
   returning them to `queued` or `none` according to configuration.
 - Log source, session ID prefix, operation, duration, and error without logging
@@ -510,3 +667,7 @@ The first release is successful when a developer can:
 6. Delete analysis without deleting messages.
 7. Resume through cmux or copy a valid resume command.
 8. Run the binary and web UI without Node.js or external static assets.
+9. Append new conversation to a multi-day session without re-sending sealed
+   history to the analyzer.
+10. Keep an overnight continuation in one topic while detecting a genuine task
+    change as a new chronological topic.
