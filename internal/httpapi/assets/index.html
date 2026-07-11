@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agent History</title>
+  <link rel="stylesheet" href="assets/app.css">
+</head>
+<body>
+  <header class="app-header">
+    <div class="brand-block">
+      <h1>Agent History</h1>
+      <span id="result-count" class="muted" aria-live="polite"></span>
+    </div>
+    <div class="header-actions">
+      <button id="scan-button" type="button">Scan</button>
+      <button id="settings-button" type="button">Settings</button>
+    </div>
+  </header>
+
+  <form id="filters" class="filter-bar" role="search">
+    <label class="search-field">
+      <span class="sr-only">Search sessions</span>
+      <input id="session-search" name="q" type="search" autocomplete="off" placeholder="Search sessions, errors, files, or topics">
+    </label>
+    <label>
+      <span class="sr-only">Agent</span>
+      <select id="agent-filter" name="agent" aria-label="Agent">
+        <option value="">All agents</option>
+        <option value="codex">Codex</option>
+        <option value="claude">Claude</option>
+      </select>
+    </label>
+    <label>
+      <span class="sr-only">Last active</span>
+      <select id="active-filter" name="active" aria-label="Last active">
+        <option value="">All time</option>
+        <option value="7d">Last 7 days</option>
+        <option value="30d">Last 30 days</option>
+        <option value="3m">Last 3 months</option>
+        <option value="6m">Last 6 months</option>
+        <option value="1y">Last year</option>
+      </select>
+    </label>
+    <details class="more-filters">
+      <summary>More filters</summary>
+      <div class="filter-menu">
+        <label>Working folder<input id="cwd-filter" name="cwd" type="text" list="directory-list" placeholder="Path contains..."></label>
+        <datalist id="directory-list"></datalist>
+        <label>Topics
+          <select id="topic-filter" name="topic_mode">
+            <option value="">Any</option>
+            <option value="focused">Focused</option>
+            <option value="multiple">Multiple</option>
+          </select>
+        </label>
+        <label>Active from<input id="active-after-filter" name="active_after" type="date"></label>
+        <label>Active through<input id="active-before-filter" name="active_before" type="date"></label>
+        <label>Started from<input id="started-after-filter" name="started_after" type="date"></label>
+        <label>Started through<input id="started-before-filter" name="started_before" type="date"></label>
+        <label>Analysis
+          <select id="status-filter" name="analysis_status">
+            <option value="">Any state</option>
+            <option value="none">Not analyzed</option>
+            <option value="current">Current</option>
+            <option value="partial">New activity</option>
+            <option value="queued">Queued</option>
+            <option value="running">Running</option>
+            <option value="failed">Failed</option>
+          </select>
+        </label>
+        <label>Sort
+          <select id="sort-filter" name="sort">
+            <option value="last_active">Last active</option>
+            <option value="started">Started</option>
+            <option value="title">Title</option>
+          </select>
+        </label>
+      </div>
+    </details>
+  </form>
+  <div id="filter-chips" class="filter-chips" aria-label="Active filters"></div>
+
+  <main class="workspace">
+    <section class="results-pane" aria-labelledby="results-heading">
+      <div class="pane-heading">
+        <h2 id="results-heading">Sessions</h2>
+      </div>
+      <div id="results-status" class="state-line" role="status">Loading sessions...</div>
+      <div id="session-results" class="session-results" role="listbox" aria-label="Session results" tabindex="0"></div>
+      <button id="load-more" class="load-more" type="button" hidden>Load more</button>
+    </section>
+
+    <section id="detail-pane" class="detail-pane" aria-label="Session detail">
+      <div id="detail-empty" class="empty-state">
+        <h2>No session selected</h2>
+      </div>
+      <div id="detail-content" hidden></div>
+    </section>
+  </main>
+
+  <dialog id="confirm-dialog">
+    <form method="dialog">
+      <h2>Delete generated analysis?</h2>
+      <p>The imported conversation will remain searchable. The title, summary, and topic chapters will be removed.</p>
+      <div class="dialog-actions">
+        <button value="cancel">Cancel</button>
+        <button id="confirm-delete" class="danger" value="confirm">Delete analysis</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="command-dialog">
+    <form method="dialog">
+      <h2>Resume command</h2>
+      <label>Run in a terminal<input id="resume-command" type="text" readonly></label>
+      <p id="copy-status" class="muted" aria-live="polite"></p>
+      <div class="dialog-actions">
+        <button value="close">Close</button>
+        <button id="copy-command" type="button">Copy command</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="settings-dialog">
+    <form id="settings-form">
+      <h2>Analysis settings</h2>
+      <label>Provider<input id="settings-provider" type="text" readonly></label>
+      <label>Model<input id="settings-model" type="text" required maxlength="200"></label>
+      <label class="check-row"><input id="settings-auto" type="checkbox"> Requeue interrupted analysis at startup</label>
+      <p id="settings-error" class="error-text" role="alert"></p>
+      <div class="dialog-actions">
+        <button id="settings-cancel" type="button">Cancel</button>
+        <button type="submit">Save settings</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  <script src="assets/app.js"></script>
+</body>
+</html>

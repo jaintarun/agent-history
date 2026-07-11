@@ -48,6 +48,65 @@ func TestSecurityMiddleware(t *testing.T) {
 	}
 }
 
+func TestEmbeddedWebApplication(t *testing.T) {
+	handler, _, _, _, _, _ := testHandler(t)
+	tests := []struct {
+		path        string
+		contentType string
+		contains    string
+	}{
+		{path: "/test-token/", contentType: "text/html", contains: `id="session-search"`},
+		{path: "/test-token/assets/app.css", contentType: "text/css", contains: ":root"},
+		{path: "/test-token/assets/app.js", contentType: "text/javascript", contains: "fetch("},
+	}
+	for _, test := range tests {
+		response := serve(handler, apiRequest(http.MethodGet, test.path, nil))
+		if response.Code != http.StatusOK {
+			t.Fatalf("GET %s status = %d body=%s", test.path, response.Code, response.Body.String())
+		}
+		if got := response.Header().Get("Content-Type"); !strings.Contains(got, test.contentType) {
+			t.Errorf("GET %s Content-Type = %q", test.path, got)
+		}
+		if !strings.Contains(response.Body.String(), test.contains) {
+			t.Errorf("GET %s body missing %q", test.path, test.contains)
+		}
+		if response.Header().Get("Content-Security-Policy") == "" {
+			t.Errorf("GET %s missing Content-Security-Policy", test.path)
+		}
+		if strings.Contains(response.Body.String(), "https://") || strings.Contains(response.Body.String(), "http://") {
+			t.Errorf("GET %s contains external asset reference", test.path)
+		}
+	}
+}
+
+func TestWebApplicationIncludesCoreWorkflows(t *testing.T) {
+	html, err := webAssets.ReadFile("assets/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	markup := string(html)
+	for _, id := range []string{
+		"session-search", "agent-filter", "active-filter", "cwd-filter", "topic-filter",
+		"status-filter", "sort-filter", "active-after-filter", "active-before-filter",
+		"started-after-filter", "started-before-filter", "session-results", "detail-content",
+		"confirm-dialog", "command-dialog", "settings-dialog",
+	} {
+		if !strings.Contains(markup, `id="`+id+`"`) {
+			t.Errorf("embedded HTML missing control %q", id)
+		}
+	}
+	javascript, err := webAssets.ReadFile("assets/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(javascript)
+	for _, workflow := range []string{"/analyze", "/analysis", "/rescan", "/launch", "/scan", "/settings"} {
+		if !strings.Contains(script, workflow) {
+			t.Errorf("embedded JavaScript missing workflow %q", workflow)
+		}
+	}
+}
+
 func TestSessionReadEndpoints(t *testing.T) {
 	handler, _, _, _, _, _ := testHandler(t)
 

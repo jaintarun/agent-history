@@ -4,6 +4,7 @@ package httpapi
 import (
 	"context"
 	"crypto/rand"
+	"embed"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -24,6 +25,9 @@ import (
 )
 
 const maxJSONBody = 1 << 20
+
+//go:embed assets/*
+var webAssets embed.FS
 
 // Scanner is the transcript-import boundary used by mutation handlers.
 type Scanner interface {
@@ -102,6 +106,9 @@ func NewHandler(config Config) (http.Handler, error) {
 }
 
 func (h *handler) routes() {
+	h.mux.HandleFunc("GET /{$}", h.index)
+	h.mux.HandleFunc("GET /assets/app.css", h.css)
+	h.mux.HandleFunc("GET /assets/app.js", h.javascript)
 	h.mux.HandleFunc("GET /api/health", h.health)
 	h.mux.HandleFunc("GET /api/sessions", h.searchSessions)
 	h.mux.HandleFunc("GET /api/sessions/facets", h.facets)
@@ -114,6 +121,31 @@ func (h *handler) routes() {
 	h.mux.HandleFunc("POST /api/scan", h.scan)
 	h.mux.HandleFunc("GET /api/settings", h.getSettings)
 	h.mux.HandleFunc("PUT /api/settings", h.putSettings)
+}
+
+func (h *handler) index(response http.ResponseWriter, _ *http.Request) {
+	h.webAsset(response, "assets/index.html", "text/html; charset=utf-8", "no-store")
+}
+
+func (h *handler) css(response http.ResponseWriter, _ *http.Request) {
+	h.webAsset(response, "assets/app.css", "text/css; charset=utf-8", "public, max-age=3600")
+}
+
+func (h *handler) javascript(response http.ResponseWriter, _ *http.Request) {
+	h.webAsset(response, "assets/app.js", "text/javascript; charset=utf-8", "public, max-age=3600")
+}
+
+func (h *handler) webAsset(response http.ResponseWriter, name, contentType, cacheControl string) {
+	content, err := webAssets.ReadFile(name)
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "asset_error", "embedded asset is unavailable")
+		return
+	}
+	response.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'")
+	response.Header().Set("Cache-Control", cacheControl)
+	response.Header().Set("Content-Type", contentType)
+	response.Header().Set("X-Content-Type-Options", "nosniff")
+	_, _ = response.Write(content)
 }
 
 func (h *handler) ServeHTTP(response http.ResponseWriter, request *http.Request) {
