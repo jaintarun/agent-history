@@ -149,7 +149,7 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 	engine := analyze.NewEngine(database, map[string]analyze.Analyzer{
 		"codex-cli": analyze.NewCodexCLI(""),
 	})
-	worker := analyze.NewWorker(database, engine, 16)
+	worker := analyze.NewWorker(database, engine, 256)
 	logger := slog.New(slog.NewTextHandler(stderr, nil))
 	server, err := httpapi.Start(ctx, *bind, httpapi.Config{
 		Store: database, Scanner: scanner, Queue: worker, Launcher: launcher, Logger: logger,
