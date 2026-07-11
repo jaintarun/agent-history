@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"unicode/utf8"
 )
 
 var schemas = map[RequestKind]json.RawMessage{
@@ -143,7 +144,7 @@ func validateText(value, field string, limit int) error {
 	if strings.TrimSpace(value) == "" {
 		return fmt.Errorf("%s is empty", field)
 	}
-	if len(value) > limit {
+	if utf8.RuneCountInString(value) > limit {
 		return fmt.Errorf("%s exceeds %d characters", field, limit)
 	}
 	return nil

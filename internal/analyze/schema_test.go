@@ -2,8 +2,19 @@ package analyze
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
+
+func TestValidateTextCountsUnicodeCharacters(t *testing.T) {
+	value := strings.Repeat("é", 800)
+	if err := validateText(value, "summary", 800); err != nil {
+		t.Fatalf("800 Unicode characters rejected: %v", err)
+	}
+	if err := validateText(value+"é", "summary", 800); err == nil {
+		t.Fatal("801 Unicode characters accepted")
+	}
+}
 
 func FuzzStructuredOutputDecoders(f *testing.F) {
 	f.Add(byte(0), []byte(`{"title":"Leaf","goal":"Goal","summary":"Summary","detail":"Detail","outcome":"done","entities":[],"files":[],"errors":[],"evidence":[1]}`))
