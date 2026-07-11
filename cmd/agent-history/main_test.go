@@ -8,8 +8,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/tarunjain/agent-history/internal/source"
 	"github.com/tarunjain/agent-history/internal/store"
 )
 
@@ -38,7 +41,7 @@ func TestServeHelpDocumentsFlags(t *testing.T) {
 		t.Fatalf("run(serve --help) code = %d, want 0; stderr = %q", code, stderr.String())
 	}
 	help := stdout.String()
-	for _, flag := range []string{"-bind", "-database", "-config", "-open-browser", "-no-open", "-scan-interval"} {
+	for _, flag := range []string{"-bind", "-database", "-config", "-open-browser", "-no-open", "-scan-on-start", "-scan-interval"} {
 		if !strings.Contains(help, flag) {
 			t.Errorf("run(serve --help) output missing %q:\n%s", flag, help)
 		}
@@ -58,6 +61,14 @@ func TestUnknownCommandFails(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "unknown command") {
 		t.Fatalf("run(unknown) stderr = %q, want unknown command error", stderr.String())
+	}
+}
+
+func TestEvalRequiresExplicitProviderUsageAcknowledgement(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := runContext(context.Background(), []string{"eval"}, &stdout, &stderr)
+	if code != 2 || !strings.Contains(stderr.String(), "--allow-provider-usage") {
+		t.Fatalf("eval guard code/stdout/stderr = %d, %q, %q", code, stdout.String(), stderr.String())
 	}
 }
 
@@ -89,6 +100,10 @@ func TestScanCodexImportsFixture(t *testing.T) {
 
 func TestServePrintsURLAndStopsCleanly(t *testing.T) {
 	databasePath := filepath.Join(t.TempDir(), "history.db")
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(configPath, []byte("[analysis]\nprovider = \"codex-cli\"\nmodel = \"configured-model\"\nauto = false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	stdoutReader, stdoutWriter := io.Pipe()
 	defer stdoutReader.Close()
@@ -97,7 +112,8 @@ func TestServePrintsURLAndStopsCleanly(t *testing.T) {
 	go func() {
 		done <- runContext(ctx, []string{
 			"serve", "--no-open", "--bind", "127.0.0.1:0",
-			"--database", databasePath, "--scan-interval", "0",
+			"--database", databasePath, "--config", configPath,
+			"--scan-on-start=false", "--scan-interval", "0",
 		}, stdoutWriter, &stderr)
 		_ = stdoutWriter.Close()
 	}()
@@ -119,7 +135,56 @@ func TestServePrintsURLAndStopsCleanly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen database after shutdown: %v", err)
 	}
+	model, ok, err := database.Setting(context.Background(), "analysis.model")
+	if err != nil || !ok || model != "configured-model" {
+		t.Fatalf("seeded model = %q, %v, %v", model, ok, err)
+	}
 	if err := database.Close(); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestScanLoopRunsStartupAndPeriodicScansUntilCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	scanner := &countingScanner{calls: make(chan struct{}, 3)}
+	done := startScanLoop(ctx, scanner, true, 10*time.Millisecond, nil)
+	for range 2 {
+		select {
+		case <-scanner.calls:
+		case <-time.After(time.Second):
+			t.Fatal("scheduled scan did not run")
+		}
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("scan loop did not stop after cancellation")
+	}
+	if scanner.maximum.Load() != 1 {
+		t.Fatalf("maximum scan concurrency = %d", scanner.maximum.Load())
+	}
+}
+
+type countingScanner struct {
+	calls   chan struct{}
+	active  atomic.Int32
+	maximum atomic.Int32
+}
+
+func (s *countingScanner) Scan(ctx context.Context, _ string) (source.ScanReport, error) {
+	active := s.active.Add(1)
+	defer s.active.Add(-1)
+	for {
+		maximum := s.maximum.Load()
+		if active <= maximum || s.maximum.CompareAndSwap(maximum, active) {
+			break
+		}
+	}
+	select {
+	case s.calls <- struct{}{}:
+	case <-ctx.Done():
+		return source.ScanReport{}, ctx.Err()
+	}
+	return source.ScanReport{}, nil
 }

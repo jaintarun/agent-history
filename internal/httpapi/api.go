@@ -41,7 +41,7 @@ type AnalysisQueue interface {
 	Enqueue(context.Context, string, analyze.Options) (<-chan error, error)
 }
 
-// Launcher is the trusted session-launch boundary implemented in Phase 8.
+// Launcher is the trusted session-launch boundary.
 type Launcher interface {
 	Launch(context.Context, string, string) (LaunchResult, error)
 }

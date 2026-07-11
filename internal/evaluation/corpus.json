@@ -1,0 +1,42 @@
+[
+  {
+    "name": "multi-topic-long-session",
+    "initial_count": 8,
+    "expected_title_terms": ["authentication", "vault"],
+    "expected_topic_ends": [4, 7],
+    "coverage_terms": ["authentication", "retry", "vault", "search", "documentation"],
+    "forbidden_terms": ["private-reasoning-marker", "system-instruction-marker"],
+    "messages": [
+      {"hours": 0, "role": "user", "text": "Fix authentication retry handling in /work/api."},
+      {"hours": 1, "role": "assistant", "text": "The authentication retry boundary is corrected and focused tests pass."},
+      {"hours": 2, "role": "tool", "tool_name": "go test", "text": "ok internal/auth"},
+      {"hours": 28, "role": "user", "text": "Continue the same authentication task and verify the timeout case."},
+      {"hours": 29, "role": "assistant", "text": "The timeout case passes without changing the goal."},
+      {"hours": 31, "role": "user", "text": "New task: build vault search filters in /work/history."},
+      {"hours": 32, "role": "assistant", "text": "Vault search now filters by agent, date, folder, and analysis state."},
+      {"hours": 33, "role": "tool", "tool_name": "go test", "text": "ok internal/search"},
+      {"hours": 80, "role": "user", "text": "New task: document installation and backup behavior in /work/history."},
+      {"hours": 81, "role": "assistant", "text": "Installation, privacy, subscription usage, and backup documentation are complete."},
+      {"hours": 82, "role": "user", "text": "Verify the documentation commands on a clean build."},
+      {"hours": 83, "role": "assistant", "text": "The documented build and launch commands were verified."}
+    ]
+  },
+  {
+    "name": "focused-multi-day-continuation",
+    "initial_count": 4,
+    "expected_title_terms": ["migration"],
+    "expected_topic_ends": [],
+    "coverage_terms": ["migration", "payments", "rollback", "verification"],
+    "forbidden_terms": ["private-reasoning-marker", "system-instruction-marker"],
+    "messages": [
+      {"hours": 0, "role": "user", "text": "Prepare the payments schema migration in /work/payments."},
+      {"hours": 1, "role": "assistant", "text": "The migration and rollback scripts are drafted."},
+      {"hours": 24, "role": "user", "text": "Continue the payments migration and add rollback verification."},
+      {"hours": 25, "role": "assistant", "text": "Rollback verification now covers the same migration."},
+      {"hours": 72, "role": "user", "text": "Continue that migration by running the staging checks."},
+      {"hours": 73, "role": "assistant", "text": "Staging verification passed for the payments migration."},
+      {"hours": 120, "role": "user", "text": "Finish the same migration with the production checklist."},
+      {"hours": 121, "role": "assistant", "text": "The production checklist and rollback steps are complete."}
+    ]
+  }
+]

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -12,10 +13,13 @@ import (
 	"os/signal"
 	"runtime"
 	"strconv"
+	"strings"
 	"syscall"
+	"time"
 
 	"github.com/tarunjain/agent-history/internal/analyze"
 	"github.com/tarunjain/agent-history/internal/config"
+	"github.com/tarunjain/agent-history/internal/evaluation"
 	"github.com/tarunjain/agent-history/internal/httpapi"
 	"github.com/tarunjain/agent-history/internal/launch"
 	"github.com/tarunjain/agent-history/internal/source"
@@ -54,7 +58,9 @@ func runContext(ctx context.Context, args []string, stdout, stderr io.Writer) in
 	case "serve":
 		return runServe(ctx, args[1:], stdout, stderr)
 	case "scan":
-		return runScan(args[1:], stdout, stderr)
+		return runScan(ctx, args[1:], stdout, stderr)
+	case "eval":
+		return runEval(ctx, args[1:], stdout, stderr)
 	case "help", "-h", "--help":
 		printUsage(stdout)
 		return 0
@@ -71,15 +77,41 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 	flags.SetOutput(stdout)
 	bind := flags.String("bind", defaults.Bind, "loopback address and port to listen on")
 	databasePath := flags.String("database", defaults.Database, "path to the SQLite database")
-	flags.String("config", defaults.Config, "path to the configuration file")
+	configPath := flags.String("config", defaults.Config, "path to the configuration file")
 	openBrowserFlag := flags.Bool("open-browser", defaults.OpenBrowser, "open the web application in the default browser")
 	noOpen := flags.Bool("no-open", false, "do not open a browser; print the web application URL")
-	flags.Duration("scan-interval", defaults.ScanInterval, "interval between transcript scans (0 disables periodic scans)")
+	scanOnStart := flags.Bool("scan-on-start", true, "scan transcript sources when the server starts")
+	scanInterval := flags.Duration("scan-interval", defaults.ScanInterval, "interval between transcript scans (0 disables periodic scans)")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
 		}
 		return 2
+	}
+	resolvedConfig, err := config.ExpandPath(*configPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "agent-history serve: resolve config path: %v\n", err)
+		return 1
+	}
+	fileConfig, err := config.Load(resolvedConfig)
+	if err != nil {
+		fmt.Fprintf(stderr, "agent-history serve: %v\n", err)
+		return 1
+	}
+	configuredAnalysis := defaultAnalysis
+	configuredAuto := true
+	if fileConfig.Analysis.Provider != "" {
+		configuredAnalysis.Provider = fileConfig.Analysis.Provider
+	}
+	if fileConfig.Analysis.Model != "" {
+		configuredAnalysis.Model = fileConfig.Analysis.Model
+	}
+	if fileConfig.Analysis.Auto != nil {
+		configuredAuto = *fileConfig.Analysis.Auto
+	}
+	if configuredAnalysis.Provider != "codex-cli" || strings.TrimSpace(configuredAnalysis.Model) == "" || len(configuredAnalysis.Model) > 200 {
+		fmt.Fprintln(stderr, "agent-history serve: config analysis provider/model is not supported")
+		return 1
 	}
 
 	resolvedDatabase, err := config.ExpandPath(*databasePath)
@@ -90,6 +122,11 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 	database, err := store.Open(ctx, resolvedDatabase)
 	if err != nil {
 		fmt.Fprintf(stderr, "agent-history serve: %v\n", err)
+		return 1
+	}
+	if err := seedAnalysisSettings(ctx, database, configuredAnalysis, configuredAuto); err != nil {
+		_ = database.Close()
+		fmt.Fprintf(stderr, "agent-history serve: seed analysis settings: %v\n", err)
 		return 1
 	}
 
@@ -134,12 +171,16 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 	}
 
 	fmt.Fprintln(stdout, server.URL())
+	scanContext, stopScans := context.WithCancel(ctx)
+	scanDone := startScanLoop(scanContext, scanner, *scanOnStart, *scanInterval, logger)
 	if *openBrowserFlag && !*noOpen {
 		if err := openBrowser(server.URL()); err != nil {
 			logger.Warn("could not open browser", "error", err)
 		}
 	}
 	serveErr := <-server.Done()
+	stopScans()
+	<-scanDone
 	worker.Close()
 	closeErr := database.Close()
 	if serveErr != nil {
@@ -151,6 +192,68 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 		return 1
 	}
 	return 0
+}
+
+func seedAnalysisSettings(ctx context.Context, database *store.Store, options analyze.Options, auto bool) error {
+	defaults := map[string]string{
+		"analysis.provider": options.Provider,
+		"analysis.model":    options.Model,
+		"analysis.auto":     strconv.FormatBool(auto),
+	}
+	missing := make(map[string]string)
+	for key, value := range defaults {
+		if _, ok, err := database.Setting(ctx, key); err != nil {
+			return err
+		} else if !ok {
+			missing[key] = value
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	return database.SetSettings(ctx, missing)
+}
+
+type scanService interface {
+	Scan(context.Context, string) (source.ScanReport, error)
+}
+
+func startScanLoop(ctx context.Context, scanner scanService, startup bool, interval time.Duration, logger *slog.Logger) <-chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		scan := func() {
+			started := time.Now()
+			report, err := scanner.Scan(ctx, "all")
+			if err != nil {
+				if ctx.Err() == nil && logger != nil {
+					logger.Error("history scan failed", "error", err, "duration_ms", time.Since(started).Milliseconds())
+				}
+				return
+			}
+			if logger != nil {
+				logger.Info("history scan complete", "discovered", report.Discovered, "imported", report.Imported, "metadata_only", report.MetadataOnly, "skipped", report.Skipped, "duration_ms", time.Since(started).Milliseconds())
+			}
+		}
+		if startup {
+			scan()
+		}
+		if interval <= 0 {
+			<-ctx.Done()
+			return
+		}
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				scan()
+			}
+		}
+	}()
+	return done
 }
 
 func analysisSettings(ctx context.Context, database *store.Store) (analyze.Options, bool, error) {
@@ -180,13 +283,45 @@ func openBrowser(url string) error {
 	return exec.Command("open", url).Start()
 }
 
-func runScan(args []string, stdout, stderr io.Writer) int {
+func runEval(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("eval", flag.ContinueOnError)
+	flags.SetOutput(stdout)
+	model := flags.String("model", defaultAnalysis.Model, "Codex model used for evaluation")
+	executable := flags.String("codex", "codex", "path to the Codex CLI executable")
+	allowUsage := flags.Bool("allow-provider-usage", false, "acknowledge that evaluation consumes Codex subscription usage")
+	if err := flags.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
+		return 2
+	}
+	if !*allowUsage {
+		fmt.Fprintln(stderr, "agent-history eval: --allow-provider-usage is required because evaluation invokes Codex repeatedly")
+		return 2
+	}
+	report, err := evaluation.Run(ctx, analyze.NewCodexCLI(*executable), *model)
+	if err != nil {
+		fmt.Fprintf(stderr, "agent-history eval: %v\n", err)
+		return 1
+	}
+	encoder := json.NewEncoder(stdout)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(report); err != nil {
+		fmt.Fprintf(stderr, "agent-history eval: encode report: %v\n", err)
+		return 1
+	}
+	if !report.Passed {
+		return 1
+	}
+	return 0
+}
+
+func runScan(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	defaults := config.Defaults()
 	flags := flag.NewFlagSet("scan", flag.ContinueOnError)
 	flags.SetOutput(stdout)
 	agent := flags.String("agent", "all", "transcript source to scan: all, codex, or claude")
 	databasePath := flags.String("database", defaults.Database, "path to the SQLite database")
-	flags.String("config", defaults.Config, "path to the configuration file")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
@@ -199,7 +334,7 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "agent-history scan: resolve database path: %v\n", err)
 		return 1
 	}
-	database, err := store.Open(context.Background(), resolvedDatabase)
+	database, err := store.Open(ctx, resolvedDatabase)
 	if err != nil {
 		fmt.Fprintf(stderr, "agent-history scan: %v\n", err)
 		return 1
@@ -210,7 +345,7 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 		codex.New(codex.DefaultHome()),
 		claude.New(claude.DefaultHome()),
 	)
-	report, err := scanner.Scan(context.Background(), *agent)
+	report, err := scanner.Scan(ctx, *agent)
 	if err != nil {
 		fmt.Fprintf(stderr, "agent-history scan: %v\n", err)
 		return 1
@@ -221,5 +356,5 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 }
 
 func printUsage(w io.Writer) {
-	fmt.Fprintln(w, "usage: agent-history <serve|scan|version> [options]")
+	fmt.Fprintln(w, "usage: agent-history <serve|scan|eval|version> [options]")
 }

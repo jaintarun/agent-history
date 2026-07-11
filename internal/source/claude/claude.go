@@ -77,16 +77,19 @@ func (a *Adapter) Discover(ctx context.Context) ([]source.Candidate, error) {
 		if !strings.HasSuffix(strings.ToLower(entry.Name()), ".jsonl") {
 			return nil
 		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if info.Size() > source.MaxTranscriptBytes {
+			return fmt.Errorf("transcript %q size %d exceeds %d bytes", path, info.Size(), source.MaxTranscriptBytes)
+		}
 		meta, err := readMetadata(path)
 		if errors.Is(err, errNoMetadata) {
 			return nil
 		}
 		if err != nil {
 			return fmt.Errorf("read metadata %q: %w", path, err)
-		}
-		info, err := entry.Info()
-		if err != nil {
-			return err
 		}
 		candidate := source.Candidate{
 			Agent: "claude", NativeSessionID: meta.ID, Path: path,
@@ -117,6 +120,13 @@ func (a *Adapter) Read(ctx context.Context, candidate source.Candidate) (source.
 		return source.ImportedSession{}, fmt.Errorf("open Claude transcript: %w", err)
 	}
 	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return source.ImportedSession{}, fmt.Errorf("stat Claude transcript: %w", err)
+	}
+	if info.Size() > source.MaxTranscriptBytes {
+		return source.ImportedSession{}, fmt.Errorf("Claude transcript size %d exceeds %d bytes", info.Size(), source.MaxTranscriptBytes)
+	}
 	hasher := sha256.New()
 	parsed, err := parseTranscript(ctx, io.TeeReader(file, hasher))
 	if err != nil {
@@ -126,10 +136,6 @@ func (a *Adapter) Read(ctx context.Context, candidate source.Candidate) (source.
 		return source.ImportedSession{}, errNoMetadata
 	}
 	if candidate.Size == 0 || candidate.ModTime.IsZero() {
-		info, err := file.Stat()
-		if err != nil {
-			return source.ImportedSession{}, fmt.Errorf("stat Claude transcript: %w", err)
-		}
 		candidate.Size = info.Size()
 		candidate.ModTime = info.ModTime().UTC()
 	}
@@ -208,7 +214,7 @@ func parseTranscript(ctx context.Context, input io.Reader) (parsedTranscript, er
 	var parsed parsedTranscript
 	toolNames := make(map[string]string)
 	for lineNumber := 1; ; lineNumber++ {
-		line, readErr := reader.ReadBytes('\n')
+		line, readErr := source.ReadJSONLRecord(reader)
 		trimmed := strings.TrimSpace(string(line))
 		if trimmed != "" {
 			var record envelope
@@ -378,7 +384,7 @@ func readMetadata(path string) (metadata, error) {
 	defer file.Close()
 	reader := bufio.NewReader(file)
 	for lineNumber := 1; ; lineNumber++ {
-		line, readErr := reader.ReadBytes('\n')
+		line, readErr := source.ReadJSONLRecord(reader)
 		trimmed := strings.TrimSpace(string(line))
 		if trimmed != "" {
 			var record envelope

@@ -1,5 +1,11 @@
 # Agent History: Detailed Implementation Plan
 
+## Implementation Status
+
+Implemented through Phase 9 for the first local release. The phase descriptions
+below remain the acceptance record; operational commands and measured results
+are documented in `README.md`.
+
 ## Delivery Strategy
 
 Implement in vertical, testable increments. Each phase must leave the repository

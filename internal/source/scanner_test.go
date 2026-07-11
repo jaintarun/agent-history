@@ -6,7 +6,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -110,6 +112,99 @@ func TestCodexScanIsIdempotentAndInvalidatesOnlyChangedSuffix(t *testing.T) {
 	}
 }
 
+func TestScannerRejectsOversizedTranscriptsBeforeRead(t *testing.T) {
+	database, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "history.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	adapter := &oversizedSource{}
+	scanner := source.NewScanner(database, adapter)
+	report, err := scanner.Scan(context.Background(), "codex")
+	if err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("oversized scan report/error = %#v, %v", report, err)
+	}
+	if adapter.read.Load() {
+		t.Fatal("oversized transcript was read")
+	}
+}
+
+func TestScannerSerializesConcurrentScans(t *testing.T) {
+	database, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "history.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	adapter := &blockingSource{entered: make(chan struct{}, 2), release: make(chan struct{}, 2)}
+	scanner := source.NewScanner(database, adapter)
+	done := make(chan error, 2)
+	go func() { _, err := scanner.Scan(context.Background(), "codex"); done <- err }()
+	go func() { _, err := scanner.Scan(context.Background(), "codex"); done <- err }()
+	<-adapter.entered
+	select {
+	case <-adapter.entered:
+		t.Fatal("second scan entered while first scan was active")
+	case <-time.After(30 * time.Millisecond):
+	}
+	adapter.release <- struct{}{}
+	<-adapter.entered
+	adapter.release <- struct{}{}
+	for range 2 {
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if adapter.maxActive.Load() != 1 {
+		t.Fatalf("maximum concurrent scans = %d", adapter.maxActive.Load())
+	}
+}
+
+type oversizedSource struct{ read atomic.Bool }
+
+func (*oversizedSource) Name() string { return "codex" }
+func (*oversizedSource) Discover(context.Context) ([]source.Candidate, error) {
+	return []source.Candidate{{Agent: "codex", NativeSessionID: "oversized", Path: "/tmp/oversized", Size: source.MaxTranscriptBytes + 1}}, nil
+}
+func (s *oversizedSource) Read(context.Context, source.Candidate) (source.ImportedSession, error) {
+	s.read.Store(true)
+	return source.ImportedSession{}, nil
+}
+func (*oversizedSource) ResumeSpec(store.Session) (source.ResumeSpec, error) {
+	return source.ResumeSpec{}, nil
+}
+
+type blockingSource struct {
+	entered   chan struct{}
+	release   chan struct{}
+	active    atomic.Int32
+	maxActive atomic.Int32
+}
+
+func (*blockingSource) Name() string { return "codex" }
+func (s *blockingSource) Discover(ctx context.Context) ([]source.Candidate, error) {
+	active := s.active.Add(1)
+	defer s.active.Add(-1)
+	for {
+		maximum := s.maxActive.Load()
+		if active <= maximum || s.maxActive.CompareAndSwap(maximum, active) {
+			break
+		}
+	}
+	s.entered <- struct{}{}
+	select {
+	case <-s.release:
+		return nil, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+func (*blockingSource) Read(context.Context, source.Candidate) (source.ImportedSession, error) {
+	return source.ImportedSession{}, nil
+}
+func (*blockingSource) ResumeSpec(store.Session) (source.ResumeSpec, error) {
+	return source.ResumeSpec{}, nil
+}
+
 func TestMixedCodexAndClaudeScanUsesNormalizedStore(t *testing.T) {
 	ctx := context.Background()
 	codexHome := t.TempDir()
@@ -143,6 +238,49 @@ func TestMixedCodexAndClaudeScanUsesNormalizedStore(t *testing.T) {
 		if detail.Session.Agent != wantAgent || len(detail.Messages) == 0 {
 			t.Fatalf("session %q = agent %q, messages %d", id, detail.Session.Agent, len(detail.Messages))
 		}
+	}
+}
+
+func TestDeletedDatabaseRebuildsDeterministicallyFromSnapshot(t *testing.T) {
+	ctx := context.Background()
+	codexHome := t.TempDir()
+	claudeHome := t.TempDir()
+	copyFile(t, filepath.Join("codex", "testdata", "basic.jsonl"), filepath.Join(codexHome, "sessions", "2026", "07", "rollout.jsonl"))
+	copyFile(t, filepath.Join("claude", "testdata", "basic.jsonl"), filepath.Join(claudeHome, "projects", "project", "session.jsonl"))
+
+	build := func(path string) map[string]store.SessionDetail {
+		database, err := store.Open(ctx, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		scanner := source.NewScanner(database, codex.New(codexHome), claude.New(claudeHome))
+		if _, err := scanner.Scan(ctx, "all"); err != nil {
+			_ = database.Close()
+			t.Fatal(err)
+		}
+		result := make(map[string]store.SessionDetail)
+		for _, id := range []string{
+			source.StableID("codex", "11111111-1111-4111-8111-111111111111"),
+			source.StableID("claude", "55555555-5555-4555-8555-555555555555"),
+		} {
+			detail, err := database.GetSession(ctx, id)
+			if err != nil {
+				_ = database.Close()
+				t.Fatal(err)
+			}
+			detail.Session.CreatedAt = time.Time{}
+			detail.Session.UpdatedAt = time.Time{}
+			result[id] = detail
+		}
+		if err := database.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	first := build(filepath.Join(t.TempDir(), "first.db"))
+	second := build(filepath.Join(t.TempDir(), "second.db"))
+	if !reflect.DeepEqual(first, second) {
+		t.Fatalf("rebuilt normalized state differs\nfirst=%#v\nsecond=%#v", first, second)
 	}
 }
 

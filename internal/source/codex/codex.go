@@ -87,6 +87,9 @@ func (a *Adapter) Discover(ctx context.Context) ([]source.Candidate, error) {
 			if err != nil {
 				return err
 			}
+			if info.Size() > source.MaxTranscriptBytes {
+				return fmt.Errorf("transcript %q size %d exceeds %d bytes", path, info.Size(), source.MaxTranscriptBytes)
+			}
 			meta, err := readMetadata(path)
 			if errors.Is(err, errNoMetadata) {
 				return nil
@@ -125,6 +128,13 @@ func (a *Adapter) Read(ctx context.Context, candidate source.Candidate) (source.
 		return source.ImportedSession{}, fmt.Errorf("open Codex transcript: %w", err)
 	}
 	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return source.ImportedSession{}, fmt.Errorf("stat Codex transcript: %w", err)
+	}
+	if info.Size() > source.MaxTranscriptBytes {
+		return source.ImportedSession{}, fmt.Errorf("Codex transcript size %d exceeds %d bytes", info.Size(), source.MaxTranscriptBytes)
+	}
 	hasher := sha256.New()
 	parsed, err := parseRollout(ctx, io.TeeReader(file, hasher))
 	if err != nil {
@@ -134,10 +144,6 @@ func (a *Adapter) Read(ctx context.Context, candidate source.Candidate) (source.
 		return source.ImportedSession{}, errNoMetadata
 	}
 	if candidate.Size == 0 || candidate.ModTime.IsZero() {
-		info, err := file.Stat()
-		if err != nil {
-			return source.ImportedSession{}, fmt.Errorf("stat Codex transcript: %w", err)
-		}
 		candidate.Size = info.Size()
 		candidate.ModTime = info.ModTime().UTC()
 	}
@@ -200,7 +206,7 @@ func parseRollout(ctx context.Context, input io.Reader) (parsedRollout, error) {
 	toolNames := make(map[string]string)
 	lineNumber := 0
 	for {
-		line, readErr := reader.ReadBytes('\n')
+		line, readErr := source.ReadJSONLRecord(reader)
 		lineNumber++
 		trimmed := strings.TrimSpace(string(line))
 		if trimmed != "" {
@@ -240,6 +246,9 @@ func consumeRecord(parsed *parsedRollout, toolNames map[string]string, record en
 	}
 	switch record.Type {
 	case "session_meta":
+		if parsed.meta.ID != "" {
+			return nil
+		}
 		var payload struct {
 			ID        string `json:"id"`
 			CWD       string `json:"cwd"`
@@ -331,7 +340,7 @@ func readMetadata(path string) (metadata, error) {
 	defer file.Close()
 	reader := bufio.NewReader(file)
 	for lineNumber := 1; ; lineNumber++ {
-		line, readErr := reader.ReadBytes('\n')
+		line, readErr := source.ReadJSONLRecord(reader)
 		trimmed := strings.TrimSpace(string(line))
 		if trimmed != "" {
 			var record envelope

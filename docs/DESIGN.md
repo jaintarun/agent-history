@@ -2,9 +2,9 @@
 
 ## Status
 
-Proposed initial design. This document defines the smallest useful product and
-the boundaries that should remain stable if a cmux or other frontend is added
-later.
+Implemented for the first local release. This document defines the shipped
+product and the boundaries that should remain stable if a cmux or other
+frontend is added later.
 
 ## Problem
 
@@ -384,19 +384,19 @@ Deleting analysis removes segments and summary nodes but preserves messages.
 
 ### Model switching
 
-Configuration contains one default provider and model:
+An optional TOML configuration seeds a new database with one provider and
+model:
 
 ```toml
 [analysis]
 provider = "codex-cli"
 model = "gpt-5.4-mini"
 auto = true
-concurrency = 1
 ```
 
-The exact model name is configuration, not a compiled enum. A reanalysis
-request may override provider or model. Analysis provenance is stored on the
-session:
+The exact model name is configuration, not a compiled enum. Once seeded, web
+settings stored in SQLite take precedence. A reanalysis request may override
+the model. Analysis provenance is stored on the session:
 
 ```text
 analysis_provider
@@ -651,8 +651,8 @@ All paths are configurable through flags for tests and alternate installations.
 - Reuse unchanged summary nodes and recompute only the affected tree path.
 - Recover sessions left in `queued` or `running` state after an unclean exit by
   returning them to `queued` or `none` according to configuration.
-- Log source, session ID prefix, operation, duration, and error without logging
-  transcript content.
+- Log aggregate scan counts and HTTP operation/status/duration without logging
+  transcript content or request bodies.
 
 ## Success Criteria
 

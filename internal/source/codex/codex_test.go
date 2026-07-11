@@ -74,6 +74,20 @@ func TestReadIgnoresIncompleteFinalRecord(t *testing.T) {
 	}
 }
 
+func TestParseKeepsFirstSessionMetadata(t *testing.T) {
+	content := "" +
+		`{"timestamp":"2026-07-01T10:00:00Z","type":"session_meta","payload":{"id":"first-session","cwd":"/tmp/first"}}` + "\n" +
+		`{"timestamp":"2026-07-01T10:01:00Z","type":"session_meta","payload":{"id":"later-session","cwd":"/tmp/later"}}` + "\n" +
+		`{"timestamp":"2026-07-01T10:02:00Z","type":"event_msg","payload":{"type":"user_message","message":"Visible"}}` + "\n"
+	parsed, err := parseRollout(context.Background(), strings.NewReader(content))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.meta.ID != "first-session" || parsed.meta.CWD != "/tmp/first" {
+		t.Fatalf("metadata = %#v", parsed.meta)
+	}
+}
+
 func TestDiscoverDeduplicatesAndPrefersActiveSession(t *testing.T) {
 	home := t.TempDir()
 	active := filepath.Join(home, "sessions", "2026", "07", "rollout-active.jsonl")

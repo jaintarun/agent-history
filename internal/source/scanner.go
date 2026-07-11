@@ -19,13 +19,18 @@ type ScanReport struct {
 
 // Scanner imports normalized sessions from configured provider adapters.
 type Scanner struct {
-	store   *store.Store
-	sources []Source
+	store    *store.Store
+	sources  []Source
+	scanSlot chan struct{}
 }
 
 // Rescan reads one stored session from its current source path regardless of
 // discovery fast-path metadata.
 func (s *Scanner) Rescan(ctx context.Context, sessionID string) (store.ImportResult, error) {
+	if err := s.acquire(ctx); err != nil {
+		return store.ImportResult{}, err
+	}
+	defer s.release()
 	detail, err := s.store.GetSession(ctx, sessionID)
 	if err != nil {
 		return store.ImportResult{}, err
@@ -59,12 +64,16 @@ func (s *Scanner) Rescan(ctx context.Context, sessionID string) (store.ImportRes
 
 // NewScanner constructs a transcript scanner.
 func NewScanner(database *store.Store, sources ...Source) *Scanner {
-	return &Scanner{store: database, sources: sources}
+	return &Scanner{store: database, sources: sources, scanSlot: make(chan struct{}, 1)}
 }
 
 // Scan imports all sources matching agent. The value "all" selects every
 // configured source.
 func (s *Scanner) Scan(ctx context.Context, agent string) (ScanReport, error) {
+	if err := s.acquire(ctx); err != nil {
+		return ScanReport{}, err
+	}
+	defer s.release()
 	var report ScanReport
 	matched := false
 	for _, adapter := range s.sources {
@@ -78,6 +87,9 @@ func (s *Scanner) Scan(ctx context.Context, agent string) (ScanReport, error) {
 		}
 		report.Discovered += len(candidates)
 		for _, candidate := range candidates {
+			if candidate.Size < 0 || candidate.Size > MaxTranscriptBytes {
+				return report, fmt.Errorf("%s transcript %q size %d exceeds %d bytes", adapter.Name(), candidate.Path, candidate.Size, MaxTranscriptBytes)
+			}
 			state, exists, err := s.store.SessionSourceState(ctx, adapter.Name(), candidate.NativeSessionID)
 			if err != nil {
 				return report, err
@@ -105,6 +117,19 @@ func (s *Scanner) Scan(ctx context.Context, agent string) (ScanReport, error) {
 		return report, fmt.Errorf("unknown transcript agent %q", agent)
 	}
 	return report, nil
+}
+
+func (s *Scanner) acquire(ctx context.Context) error {
+	select {
+	case s.scanSlot <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (s *Scanner) release() {
+	<-s.scanSlot
 }
 
 func sourceUnchanged(state store.SourceState, candidate Candidate) bool {
