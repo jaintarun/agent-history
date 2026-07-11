@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"time"
 )
 
 // SessionSourceState returns the persisted discovery identity for a native
@@ -62,6 +63,13 @@ func (s *Store) ImportSession(ctx context.Context, session Session, messages []M
 		}
 		if err := invalidateSummarySuffix(ctx, tx, session.ID, firstChanged); err != nil {
 			return ImportResult{}, err
+		}
+		if _, err := tx.ExecContext(ctx, `
+            UPDATE sessions
+            SET analysis_status = CASE WHEN analysis_status = 'current' THEN 'partial' ELSE analysis_status END,
+                updated_at = ?
+            WHERE id = ?`, formatTime(time.Now()), session.ID); err != nil {
+			return ImportResult{}, fmt.Errorf("mark changed analysis partial: %w", err)
 		}
 	}
 	if err := rebuildSessionFTS(ctx, tx, session.ID); err != nil {

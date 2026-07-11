@@ -107,6 +107,24 @@ func (s *Store) DeleteAnalysis(ctx context.Context, sessionID string) error {
 	return nil
 }
 
+// SetAnalysisStatus updates worker state without replacing visible analysis.
+func (s *Store) SetAnalysisStatus(ctx context.Context, sessionID, status, message string) error {
+	result, err := s.db.ExecContext(ctx, `
+        UPDATE sessions SET analysis_status = ?, analysis_error = ?, updated_at = ?
+        WHERE id = ?`, status, nullableText(message), formatTime(time.Now()), sessionID)
+	if err != nil {
+		return fmt.Errorf("set analysis status: %w", err)
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("analysis status result: %w", err)
+	}
+	if count == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // PutSummaryNode inserts or refreshes one content-addressed summary node.
 func (s *Store) PutSummaryNode(ctx context.Context, node SummaryNode) error {
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -166,6 +184,35 @@ func (s *Store) FindSummaryNode(ctx context.Context, key NodeCacheKey) (SummaryN
 		key.SessionID, key.Kind, key.StartSequence, key.EndSequence, key.InputHash,
 		key.Provider, key.Model, key.PromptVersion, key.NormalizerVersion)
 	return scanSummaryNode(row)
+}
+
+// SummaryNodes returns cached nodes for one complete analysis provenance.
+func (s *Store) SummaryNodes(ctx context.Context, sessionID, kind, provider, model, promptVersion, normalizerVersion string) ([]SummaryNode, error) {
+	rows, err := s.db.QueryContext(ctx, `
+        SELECT id, session_id, parent_id, kind, position, start_sequence,
+               end_sequence, input_hash, summary_json, sealed, provider, model,
+               prompt_version, normalizer_version, created_at, updated_at
+        FROM summary_nodes
+        WHERE session_id = ? AND kind = ? AND provider = ? AND model = ?
+          AND prompt_version = ? AND normalizer_version = ?
+        ORDER BY start_sequence, end_sequence, position`,
+		sessionID, kind, provider, model, promptVersion, normalizerVersion)
+	if err != nil {
+		return nil, fmt.Errorf("list summary nodes: %w", err)
+	}
+	defer rows.Close()
+	var nodes []SummaryNode
+	for rows.Next() {
+		node, err := scanSummaryNode(rows)
+		if err != nil {
+			return nil, err
+		}
+		nodes = append(nodes, node)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list summary nodes: %w", err)
+	}
+	return nodes, nil
 }
 
 // DeleteSummaryNode removes a node and descendants linked through parent_id.
