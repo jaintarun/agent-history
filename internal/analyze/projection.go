@@ -11,7 +11,12 @@ import (
 	"github.com/tarunjain/agent-history/internal/store"
 )
 
-const maxProjectedMessageChars = 8_000
+const (
+	maxProjectedTurnChars     = 8_000
+	userProjectionBudget      = 2_400
+	toolProjectionBudget      = 2_400
+	assistantProjectionBudget = 2_800
+)
 
 // Turn groups one user request with related assistant and tool activity.
 type Turn struct {
@@ -60,20 +65,95 @@ func BuildTurns(messages []store.Message) []Turn {
 // CompactTurn builds deterministic bounded model input while retaining the
 // exact normalized text in SQLite for search.
 func CompactTurn(turn Turn) string {
-	var result strings.Builder
+	var users, assistants, tools []store.Message
 	for _, message := range turn.Messages {
-		text := message.Text
-		if message.Role == "tool" {
-			text = compactToolText(text)
+		switch message.Role {
+		case "user":
+			users = append(users, message)
+		case "assistant":
+			assistants = append(assistants, message)
+		case "tool":
+			tools = append(tools, message)
 		}
-		text = boundText(text, maxProjectedMessageChars)
+	}
+	var sections []string
+	if projected := projectMessages(users, userProjectionBudget, nil); projected != "" {
+		sections = append(sections, projected)
+	}
+	selectedTools := selectToolMessages(tools)
+	if len(selectedTools) != 0 {
+		prefix := ""
+		if omitted := len(tools) - len(selectedTools); omitted > 0 {
+			prefix = fmt.Sprintf("[%d tool messages omitted after deterministic fact selection]\n", omitted)
+		}
+		sections = append(sections, prefix+projectMessages(selectedTools, toolProjectionBudget-len(prefix), compactToolText))
+	}
+	selectedAssistants := selectEdgeMessages(assistants, 1, 3)
+	if projected := projectMessages(selectedAssistants, assistantProjectionBudget, nil); projected != "" {
+		sections = append(sections, projected)
+	}
+	return strings.TrimSpace(boundText(strings.Join(sections, "\n"), maxProjectedTurnChars))
+}
+
+func projectMessages(messages []store.Message, budget int, transform func(string) string) string {
+	if len(messages) == 0 || budget <= 0 {
+		return ""
+	}
+	perMessage := max(80, budget/len(messages)-80)
+	var result strings.Builder
+	for _, message := range messages {
+		text := message.Text
+		if transform != nil {
+			text = transform(text)
+		}
+		text = boundText(text, perMessage)
 		label := message.Role
 		if message.ToolName != "" {
 			label += ":" + message.ToolName
 		}
 		fmt.Fprintf(&result, "[message %d %s]\n%s\n", message.Sequence, label, text)
 	}
-	return strings.TrimSpace(result.String())
+	return strings.TrimSpace(boundText(result.String(), budget))
+}
+
+func selectToolMessages(messages []store.Message) []store.Message {
+	if len(messages) <= 8 {
+		return messages
+	}
+	selected := make(map[int]bool)
+	for _, index := range []int{0, 1, len(messages) - 2, len(messages) - 1} {
+		selected[index] = true
+	}
+	for index, message := range messages {
+		if len(selected) >= 8 {
+			break
+		}
+		lower := strings.ToLower(message.Text)
+		for _, marker := range []string{"error", "failed", "failure", "panic", "timeout", "not found", "exit code"} {
+			if strings.Contains(lower, marker) {
+				selected[index] = true
+				break
+			}
+		}
+	}
+	indices := make([]int, 0, len(selected))
+	for index := range selected {
+		indices = append(indices, index)
+	}
+	sort.Ints(indices)
+	result := make([]store.Message, 0, len(indices))
+	for _, index := range indices {
+		result = append(result, messages[index])
+	}
+	return result
+}
+
+func selectEdgeMessages(messages []store.Message, first, last int) []store.Message {
+	if len(messages) <= first+last {
+		return messages
+	}
+	result := append([]store.Message(nil), messages[:first]...)
+	return append(result, messages[len(messages)-last:]...)
 }
 
 func compactToolText(text string) string {

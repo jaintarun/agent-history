@@ -45,6 +45,30 @@ func TestCompactProjectionCollapsesRepeatedLogsAndDiffBodies(t *testing.T) {
 	}
 }
 
+func TestCompactProjectionBoundsToolHeavyTurnAndKeepsConclusion(t *testing.T) {
+	now := time.Date(2026, 7, 1, 10, 0, 0, 0, time.UTC)
+	turn := Turn{Messages: []store.Message{{Sequence: 0, Timestamp: now, Role: "user", Text: "Diagnose the production retry failure."}}}
+	for sequence := 1; sequence <= 100; sequence++ {
+		text := strings.Repeat("routine output ", 100)
+		if sequence == 50 {
+			text = "error: retry timeout in internal/auth/retry.go"
+		}
+		turn.Messages = append(turn.Messages, store.Message{Sequence: sequence, Timestamp: now, Role: "tool", ToolName: "exec", Text: text})
+	}
+	turn.Messages = append(turn.Messages, store.Message{Sequence: 101, Timestamp: now, Role: "assistant", Text: "The retry timeout was fixed and verified."})
+
+	projection := CompactTurn(turn)
+
+	if len(projection) > maxProjectedTurnChars {
+		t.Fatalf("tool-heavy projection length = %d", len(projection))
+	}
+	for _, required := range []string{"Diagnose the production retry failure", "retry timeout", "fixed and verified", "tool messages omitted"} {
+		if !strings.Contains(projection, required) {
+			t.Fatalf("projection missing %q:\n%s", required, projection)
+		}
+	}
+}
+
 func TestBoundaryScoringDoesNotSplitOnIdleAlone(t *testing.T) {
 	before := Turn{StartedAt: time.Date(2026, 7, 1, 10, 0, 0, 0, time.UTC), EndedAt: time.Date(2026, 7, 1, 11, 0, 0, 0, time.UTC), UserText: "Continue implementing the session index"}
 	after := Turn{StartedAt: before.EndedAt.Add(24 * time.Hour), EndedAt: before.EndedAt.Add(25 * time.Hour), UserText: "Continue the session index implementation"}

@@ -32,7 +32,7 @@ var version = "dev"
 
 var defaultAnalysis = analyze.Options{
 	Provider: "codex-cli", Model: "gpt-5.4-mini", PromptVersion: "v1",
-	NormalizerVersion: "v1", LeafTargetChars: 12_000, RollupFanout: 8,
+	NormalizerVersion: "v2", LeafTargetChars: 48_000, RollupFanout: 8,
 }
 
 func main() {

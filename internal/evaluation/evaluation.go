@@ -105,7 +105,7 @@ func runFixture(ctx context.Context, analyzer analyze.Analyzer, model string, in
 		return CaseReport{}, err
 	}
 	options := analyze.Options{
-		Provider: "evaluation", Model: model, PromptVersion: "v1", NormalizerVersion: "v1",
+		Provider: "evaluation", Model: model, PromptVersion: "v1", NormalizerVersion: "v2",
 		LeafTargetChars: 900, RollupFanout: 4,
 	}
 	engine := analyze.NewEngine(database, map[string]analyze.Analyzer{"evaluation": analyzer})
