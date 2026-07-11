@@ -9,8 +9,19 @@ and provides full-text search through an embedded web application. A session
 can be reanalyzed at any time, and supported sessions can be resumed from the
 web UI.
 
-This repository is currently documentation-first. Implementation has not
-started.
+Implementation follows the vertical phases in
+[`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md).
+
+## Development checks
+
+```sh
+gofmt -w <changed-go-files>
+go test ./...
+go test -race ./...
+go vet ./...
+govulncheck ./...
+go build ./cmd/agent-history
+```
 
 ## Documents
 

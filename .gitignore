@@ -1,0 +1,8 @@
+/agent-history
+/bin/
+/coverage.out
+*.db
+*.db-shm
+*.db-wal
+*.test
+config.local.toml
