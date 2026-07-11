@@ -49,6 +49,20 @@ func TestReadNormalizesVisibleRecords(t *testing.T) {
 	}
 }
 
+func TestResumeSpec(t *testing.T) {
+	imported, err := New(t.TempDir()).Read(context.Background(), candidateForFixture(t, "basic.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec, err := New(t.TempDir()).ResumeSpec(imported.Session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.Executable != "codex" || len(spec.Args) != 2 || spec.Args[0] != "resume" || spec.Args[1] != imported.Session.NativeSessionID {
+		t.Fatalf("resume spec = %#v", spec)
+	}
+}
+
 func TestReadIgnoresIncompleteFinalRecord(t *testing.T) {
 	adapter := New(t.TempDir())
 	imported, err := adapter.Read(context.Background(), candidateForFixture(t, "partial.jsonl"))

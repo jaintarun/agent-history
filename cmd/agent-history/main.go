@@ -17,6 +17,7 @@ import (
 	"github.com/tarunjain/agent-history/internal/analyze"
 	"github.com/tarunjain/agent-history/internal/config"
 	"github.com/tarunjain/agent-history/internal/httpapi"
+	"github.com/tarunjain/agent-history/internal/launch"
 	"github.com/tarunjain/agent-history/internal/source"
 	"github.com/tarunjain/agent-history/internal/source/claude"
 	"github.com/tarunjain/agent-history/internal/source/codex"
@@ -104,17 +105,17 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 		fmt.Fprintf(stderr, "agent-history serve: recover analysis state: %v\n", err)
 		return 1
 	}
-	scanner := source.NewScanner(database,
-		codex.New(codex.DefaultHome()),
-		claude.New(claude.DefaultHome()),
-	)
+	codexSource := codex.New(codex.DefaultHome())
+	claudeSource := claude.New(claude.DefaultHome())
+	scanner := source.NewScanner(database, codexSource, claudeSource)
+	launcher := launch.New(database, codexSource, claudeSource)
 	engine := analyze.NewEngine(database, map[string]analyze.Analyzer{
 		"codex-cli": analyze.NewCodexCLI(""),
 	})
 	worker := analyze.NewWorker(database, engine, 16)
 	logger := slog.New(slog.NewTextHandler(stderr, nil))
 	server, err := httpapi.Start(ctx, *bind, httpapi.Config{
-		Store: database, Scanner: scanner, Queue: worker, Logger: logger,
+		Store: database, Scanner: scanner, Queue: worker, Launcher: launcher, Logger: logger,
 		AnalysisDefaults: options,
 	})
 	if err != nil {

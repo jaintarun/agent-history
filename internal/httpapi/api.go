@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/tarunjain/agent-history/internal/analyze"
+	"github.com/tarunjain/agent-history/internal/launch"
 	"github.com/tarunjain/agent-history/internal/source"
 	"github.com/tarunjain/agent-history/internal/store"
 )
@@ -46,11 +47,7 @@ type Launcher interface {
 }
 
 // LaunchResult is safe structured launch/copy output.
-type LaunchResult struct {
-	Mode      string `json:"mode"`
-	Command   string `json:"command,omitempty"`
-	Workspace string `json:"workspace,omitempty"`
-}
+type LaunchResult = launch.Result
 
 // Config supplies API dependencies and process-local security state.
 type Config struct {
