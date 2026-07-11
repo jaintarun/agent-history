@@ -11,6 +11,24 @@ import (
 
 // UpsertSession inserts source metadata or refreshes the existing record.
 func (s *Store) UpsertSession(ctx context.Context, session Session) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin session upsert: %w", err)
+	}
+	defer tx.Rollback()
+	if err := upsertSession(ctx, tx, session); err != nil {
+		return err
+	}
+	if err := rebuildSessionFTS(ctx, tx, session.ID); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit session upsert: %w", err)
+	}
+	return nil
+}
+
+func upsertSession(ctx context.Context, tx *sql.Tx, session Session) error {
 	now := time.Now().UTC()
 	if session.CreatedAt.IsZero() {
 		session.CreatedAt = now
@@ -21,12 +39,7 @@ func (s *Store) UpsertSession(ctx context.Context, session Session) error {
 	if session.AnalysisStatus == "" {
 		session.AnalysisStatus = "none"
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin session upsert: %w", err)
-	}
-	defer tx.Rollback()
-	_, err = tx.ExecContext(ctx, `
+	_, err := tx.ExecContext(ctx, `
         INSERT INTO sessions(
             id, agent, native_session_id, source_path, source_size, source_mtime,
             source_hash, working_directory, started_at, last_active_at,
@@ -50,12 +63,6 @@ func (s *Store) UpsertSession(ctx context.Context, session Session) error {
 		formatTime(session.CreatedAt), formatTime(session.UpdatedAt))
 	if err != nil {
 		return fmt.Errorf("upsert session: %w", err)
-	}
-	if err := rebuildSessionFTS(ctx, tx, session.ID); err != nil {
-		return err
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit session upsert: %w", err)
 	}
 	return nil
 }

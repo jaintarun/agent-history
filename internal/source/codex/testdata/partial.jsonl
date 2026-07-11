@@ -1,0 +1,4 @@
+{"timestamp":"2026-07-02T09:59:00Z","type":"session_meta","payload":{"id":"22222222-2222-4222-8222-222222222222","timestamp":"2026-07-02T09:59:00Z","cwd":"/Users/example/work/search"}}
+{"timestamp":"2026-07-02T10:00:00Z","type":"event_msg","payload":{"type":"user_message","message":"Index the sessions."}}
+{"timestamp":"2026-07-02T10:01:00Z","type":"event_msg","payload":{"type":"agent_message","message":"Indexing is complete.","phase":"final_answer"}}
+{"timestamp":"2026-07-02T10:02:00Z","type":"event_msg","payload":{"type":"agent_message","message":"unfinished"

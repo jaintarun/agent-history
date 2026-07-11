@@ -109,3 +109,18 @@ type SessionDetail struct {
 	Messages []Message
 	Segments []Segment
 }
+
+// SourceState is the persisted fast-path identity for a transcript.
+type SourceState struct {
+	SessionID  string
+	SourcePath string
+	SourceSize int64
+	SourceTime time.Time
+	SourceHash string
+}
+
+// ImportResult describes the normalized change made by ImportSession.
+type ImportResult struct {
+	Changed              bool
+	FirstChangedSequence int
+}

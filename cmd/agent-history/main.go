@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -8,6 +9,9 @@ import (
 	"os"
 
 	"github.com/tarunjain/agent-history/internal/config"
+	"github.com/tarunjain/agent-history/internal/source"
+	"github.com/tarunjain/agent-history/internal/source/codex"
+	"github.com/tarunjain/agent-history/internal/store"
 )
 
 var version = "dev"
@@ -65,8 +69,8 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 	defaults := config.Defaults()
 	flags := flag.NewFlagSet("scan", flag.ContinueOnError)
 	flags.SetOutput(stdout)
-	flags.String("agent", "all", "transcript source to scan: all, codex, or claude")
-	flags.String("database", defaults.Database, "path to the SQLite database")
+	agent := flags.String("agent", "all", "transcript source to scan: all, codex, or claude")
+	databasePath := flags.String("database", defaults.Database, "path to the SQLite database")
 	flags.String("config", defaults.Config, "path to the configuration file")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -75,8 +79,27 @@ func runScan(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
-	fmt.Fprintln(stderr, "agent-history scan: not implemented")
-	return 1
+	resolvedDatabase, err := config.ExpandPath(*databasePath)
+	if err != nil {
+		fmt.Fprintf(stderr, "agent-history scan: resolve database path: %v\n", err)
+		return 1
+	}
+	database, err := store.Open(context.Background(), resolvedDatabase)
+	if err != nil {
+		fmt.Fprintf(stderr, "agent-history scan: %v\n", err)
+		return 1
+	}
+	defer database.Close()
+
+	scanner := source.NewScanner(database, codex.New(codex.DefaultHome()))
+	report, err := scanner.Scan(context.Background(), *agent)
+	if err != nil {
+		fmt.Fprintf(stderr, "agent-history scan: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "discovered=%d imported=%d metadata_only=%d skipped=%d\n",
+		report.Discovered, report.Imported, report.MetadataOnly, report.Skipped)
+	return 0
 }
 
 func printUsage(w io.Writer) {

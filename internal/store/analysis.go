@@ -193,6 +193,16 @@ func (s *Store) InvalidateSummarySuffix(ctx context.Context, sessionID string, f
 		return fmt.Errorf("begin summary invalidation: %w", err)
 	}
 	defer tx.Rollback()
+	if err := invalidateSummarySuffix(ctx, tx, sessionID, firstChangedSequence); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit summary invalidation: %w", err)
+	}
+	return nil
+}
+
+func invalidateSummarySuffix(ctx context.Context, tx *sql.Tx, sessionID string, firstChangedSequence int) error {
 	rows, err := tx.QueryContext(ctx, `
         WITH RECURSIVE invalid(id, parent_id) AS (
             SELECT id, parent_id
@@ -223,7 +233,7 @@ func (s *Store) InvalidateSummarySuffix(ctx context.Context, sessionID string, f
 		return fmt.Errorf("find invalid summary nodes: %w", err)
 	}
 	if len(ids) == 0 {
-		return tx.Commit()
+		return nil
 	}
 
 	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
@@ -246,9 +256,6 @@ func (s *Store) InvalidateSummarySuffix(ctx context.Context, sessionID string, f
 	if _, err := tx.ExecContext(ctx,
 		`DELETE FROM summary_nodes WHERE id IN (`+placeholders+`)`, deleteArgs...); err != nil {
 		return fmt.Errorf("delete invalid summary nodes: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit summary invalidation: %w", err)
 	}
 	return nil
 }

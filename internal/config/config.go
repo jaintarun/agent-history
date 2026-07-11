@@ -1,7 +1,12 @@
 // Package config owns application defaults and configuration loading.
 package config
 
-import "time"
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+)
 
 // Values contains command-level application settings.
 type Values struct {
@@ -21,4 +26,20 @@ func Defaults() Values {
 		OpenBrowser:  true,
 		ScanInterval: 15 * time.Minute,
 	}
+}
+
+// ExpandPath expands a leading home-directory marker without interpreting any
+// other shell syntax.
+func ExpandPath(path string) (string, error) {
+	if path != "~" && !strings.HasPrefix(path, "~/") {
+		return path, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	if path == "~" {
+		return home, nil
+	}
+	return filepath.Join(home, strings.TrimPrefix(path, "~/")), nil
 }
