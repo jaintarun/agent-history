@@ -3,6 +3,7 @@ package source
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/tarunjain/agent-history/internal/store"
@@ -20,6 +21,40 @@ type ScanReport struct {
 type Scanner struct {
 	store   *store.Store
 	sources []Source
+}
+
+// Rescan reads one stored session from its current source path regardless of
+// discovery fast-path metadata.
+func (s *Scanner) Rescan(ctx context.Context, sessionID string) (store.ImportResult, error) {
+	detail, err := s.store.GetSession(ctx, sessionID)
+	if err != nil {
+		return store.ImportResult{}, err
+	}
+	var adapter Source
+	for _, candidate := range s.sources {
+		if candidate.Name() == detail.Session.Agent {
+			adapter = candidate
+			break
+		}
+	}
+	if adapter == nil {
+		return store.ImportResult{}, fmt.Errorf("source adapter %q is not configured", detail.Session.Agent)
+	}
+	info, err := os.Stat(detail.Session.SourcePath)
+	if err != nil {
+		return store.ImportResult{}, fmt.Errorf("stat session source: %w", err)
+	}
+	imported, err := adapter.Read(ctx, Candidate{
+		Agent: detail.Session.Agent, NativeSessionID: detail.Session.NativeSessionID,
+		Path: detail.Session.SourcePath, Size: info.Size(), ModTime: info.ModTime().UTC(),
+	})
+	if err != nil {
+		return store.ImportResult{}, err
+	}
+	if imported.Session.NativeSessionID != detail.Session.NativeSessionID {
+		return store.ImportResult{}, fmt.Errorf("source session ID changed from %q to %q", detail.Session.NativeSessionID, imported.Session.NativeSessionID)
+	}
+	return s.store.ImportSession(ctx, imported.Session, imported.Messages)
 }
 
 // NewScanner constructs a transcript scanner.

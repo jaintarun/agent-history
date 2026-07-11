@@ -125,6 +125,60 @@ func (s *Store) SetAnalysisStatus(ctx context.Context, sessionID, status, messag
 	return nil
 }
 
+// RecoverAnalysisStates resets jobs left queued or running by an unclean exit.
+// It returns the affected session IDs so an auto-analysis caller can requeue
+// them after the transaction commits.
+func (s *Store) RecoverAnalysisStates(ctx context.Context, auto bool) ([]string, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin analysis recovery: %w", err)
+	}
+	defer tx.Rollback()
+	rows, err := tx.QueryContext(ctx, `
+        SELECT id FROM sessions
+        WHERE analysis_status IN ('queued', 'running')
+        ORDER BY id`)
+	if err != nil {
+		return nil, fmt.Errorf("list stale analysis states: %w", err)
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("scan stale analysis state: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list stale analysis states: %w", err)
+	}
+	statusExpression := `CASE
+            WHEN analysis_provider IS NULL THEN 'none'
+            WHEN analyzed_through_sequence < COALESCE(
+                (SELECT MAX(sequence) FROM messages WHERE session_id = sessions.id),
+                analyzed_through_sequence
+            ) THEN 'partial'
+            ELSE 'current'
+        END`
+	if auto {
+		statusExpression = `'queued'`
+	}
+	query := `UPDATE sessions SET analysis_status = ` + statusExpression + `,
+        analysis_error = NULL, updated_at = ?
+        WHERE analysis_status IN ('queued', 'running')`
+	if _, err := tx.ExecContext(ctx, query, formatTime(time.Now())); err != nil {
+		return nil, fmt.Errorf("recover analysis states: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit analysis recovery: %w", err)
+	}
+	return ids, nil
+}
+
 // PutSummaryNode inserts or refreshes one content-addressed summary node.
 func (s *Store) PutSummaryNode(ctx context.Context, node SummaryNode) error {
 	tx, err := s.db.BeginTx(ctx, nil)

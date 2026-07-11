@@ -272,6 +272,65 @@ func TestSettingsRejectSecrets(t *testing.T) {
 	}
 }
 
+func TestRecoverAnalysisStates(t *testing.T) {
+	store := openTestStore(t)
+	for _, id := range []string{"queued", "running", "current"} {
+		session := testSession(id)
+		if err := store.UpsertSession(context.Background(), session); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.SetAnalysisStatus(context.Background(), id, id, "stale"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ids, err := store.RecoverAnalysisStates(context.Background(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(ids) != fmt.Sprint([]string{"queued", "running"}) {
+		t.Fatalf("recovered IDs = %v", ids)
+	}
+	for _, id := range []string{"queued", "running"} {
+		detail, err := store.GetSession(context.Background(), id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if detail.Session.AnalysisStatus != "none" || detail.Session.AnalysisError != "" {
+			t.Fatalf("recovered %s status/error = %q, %q", id, detail.Session.AnalysisStatus, detail.Session.AnalysisError)
+		}
+	}
+}
+
+func TestRecoverAnalysisStatesRestoresVisibleAnalysis(t *testing.T) {
+	store := openTestStore(t)
+	session := testSession("reanalyzing")
+	messages := []Message{{Sequence: 0, Timestamp: session.StartedAt, Role: "user", Text: "visible"}}
+	if _, err := store.ImportSession(context.Background(), session, messages); err != nil {
+		t.Fatal(err)
+	}
+	sequence := 0
+	if err := store.ReplaceAnalysis(context.Background(), session.ID, Analysis{
+		Title: "Existing title", Summary: "Existing summary", Status: "current",
+		Provider: "fake", Model: "test", PromptVersion: "v1", AnalyzedAt: session.LastActiveAt,
+		AnalyzedHash: "hash", AnalyzedThroughSequence: &sequence, AnalyzedThroughAt: session.LastActiveAt,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetAnalysisStatus(context.Background(), session.ID, "running", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RecoverAnalysisStates(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	detail, err := store.GetSession(context.Background(), session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail.Session.AnalysisStatus != "current" || detail.Session.Title != "Existing title" {
+		t.Fatalf("recovered analysis = %#v", detail.Session)
+	}
+}
+
 func TestConcurrentReaderAndSingleWriter(t *testing.T) {
 	store := openTestStore(t)
 	session := testSession("session-concurrent")

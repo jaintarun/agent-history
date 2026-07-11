@@ -1,11 +1,16 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
+	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/tarunjain/agent-history/internal/store"
 )
 
 func TestVersion(t *testing.T) {
@@ -79,5 +84,42 @@ func TestScanCodexImportsFixture(t *testing.T) {
 	}
 	if got := stdout.String(); !strings.Contains(got, "discovered=1 imported=1") {
 		t.Fatalf("run(scan) stdout = %q", got)
+	}
+}
+
+func TestServePrintsURLAndStopsCleanly(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "history.db")
+	ctx, cancel := context.WithCancel(context.Background())
+	stdoutReader, stdoutWriter := io.Pipe()
+	defer stdoutReader.Close()
+	var stderr bytes.Buffer
+	done := make(chan int, 1)
+	go func() {
+		done <- runContext(ctx, []string{
+			"serve", "--no-open", "--bind", "127.0.0.1:0",
+			"--database", databasePath, "--scan-interval", "0",
+		}, stdoutWriter, &stderr)
+		_ = stdoutWriter.Close()
+	}()
+	line := make(chan string, 1)
+	go func() {
+		value, _ := bufio.NewReader(stdoutReader).ReadString('\n')
+		line <- value
+	}()
+
+	output := <-line
+	cancel()
+	if code := <-done; code != 0 {
+		t.Fatalf("serve exit code = %d stderr=%s", code, stderr.String())
+	}
+	if !strings.HasPrefix(output, "http://127.0.0.1:") || !strings.Contains(output, "/") {
+		t.Fatalf("serve output = %q", output)
+	}
+	database, err := store.Open(context.Background(), databasePath)
+	if err != nil {
+		t.Fatalf("reopen database after shutdown: %v", err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
