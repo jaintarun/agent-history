@@ -45,6 +45,13 @@ var schemas = map[RequestKind]json.RawMessage{
   },
   "required":["title","summary"]
 }`),
+	RequestTitle: json.RawMessage(`{
+  "type":"object","additionalProperties":false,
+  "properties":{
+    "title":{"type":"string","minLength":40,"maxLength":160}
+  },
+  "required":["title"]
+}`),
 }
 
 func rollupSchema() json.RawMessage {
@@ -110,6 +117,20 @@ func decodeSession(raw json.RawMessage) (sessionSummary, error) {
 	}
 	if err := validateText(result.Summary, "session summary", 1000); err != nil {
 		return sessionSummary{}, err
+	}
+	return result, nil
+}
+
+func decodeTitle(raw json.RawMessage) (titleSummary, error) {
+	var result titleSummary
+	if err := decodeStrict(raw, &result); err != nil {
+		return titleSummary{}, err
+	}
+	if err := validateText(result.Title, "session title", 160); err != nil {
+		return titleSummary{}, err
+	}
+	if utf8.RuneCountInString(result.Title) < 40 {
+		return titleSummary{}, errors.New("session title is shorter than 40 characters")
 	}
 	return result, nil
 }

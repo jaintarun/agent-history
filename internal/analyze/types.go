@@ -14,6 +14,7 @@ const (
 	RequestRollup   RequestKind = "rollup"
 	RequestTopic    RequestKind = "topic"
 	RequestSession  RequestKind = "session"
+	RequestTitle    RequestKind = "title"
 )
 
 // StructuredRequest contains bounded prompt input and the required response
@@ -86,6 +87,10 @@ type rollupSummary struct {
 type sessionSummary struct {
 	Title   string `json:"title"`
 	Summary string `json:"summary"`
+}
+
+type titleSummary struct {
+	Title string `json:"title"`
 }
 
 type modelBoundary struct {

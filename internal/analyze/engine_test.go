@@ -114,6 +114,95 @@ func TestEnginePromotesSingleLeafWithoutRedundantModelCalls(t *testing.T) {
 	}
 }
 
+func TestEngineRetitleUsesStoredTopicsAndChangesOnlyTitle(t *testing.T) {
+	database, session := analysisFixture(t)
+	fake := &fakeAnalyzer{}
+	engine := NewEngine(database, map[string]Analyzer{"fake": fake})
+	options := Options{
+		Provider: "fake", Model: "test", PromptVersion: "v1",
+		NormalizerVersion: "v1", LeafTargetChars: 10_000, RollupFanout: 8,
+	}
+	if _, err := engine.Analyze(context.Background(), session.ID, options); err != nil {
+		t.Fatal(err)
+	}
+	before, err := database.GetSession(context.Background(), session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake.reset()
+	fake.responses = map[RequestKind]json.RawMessage{
+		RequestTitle: json.RawMessage(`{"title":"Authentication repair and searchable vault redesign outcomes"}`),
+	}
+
+	title, err := engine.Retitle(context.Background(), session.ID, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if title != "Authentication repair and searchable vault redesign outcomes" {
+		t.Fatalf("retitled title = %q", title)
+	}
+	requests := fake.requestsCopy()
+	if len(requests) != 1 || requests[0].Kind != RequestTitle ||
+		!strings.Contains(requests[0].Prompt, before.Segments[0].Title) ||
+		strings.Contains(requests[0].Prompt, "Fix authentication") {
+		t.Fatalf("retitle requests = %#v", requests)
+	}
+	after, err := database.GetSession(context.Background(), session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Session.Summary != before.Session.Summary || len(after.Segments) != len(before.Segments) || after.Session.AnalysisStatus != "current" {
+		t.Fatalf("retitle changed non-title analysis: before=%#v after=%#v", before, after)
+	}
+	nodes, err := database.SummaryNodes(context.Background(), session.ID, "session", "fake", "test", "v1", "v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nodes) != 1 || !strings.Contains(nodes[0].SummaryJSON, title) {
+		t.Fatalf("retitled session nodes = %#v", nodes)
+	}
+}
+
+func TestEngineRetitleFailurePreservesAnalysisAndIsMarkedDistinctly(t *testing.T) {
+	database, session := analysisFixture(t)
+	fake := &fakeAnalyzer{}
+	engine := NewEngine(database, map[string]Analyzer{"fake": fake})
+	options := Options{
+		Provider: "fake", Model: "test", PromptVersion: "v1",
+		NormalizerVersion: "v1", LeafTargetChars: 10_000, RollupFanout: 8,
+	}
+	if _, err := engine.Analyze(context.Background(), session.ID, options); err != nil {
+		t.Fatal(err)
+	}
+	before, err := database.GetSession(context.Background(), session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake.reset()
+	fake.responses = map[RequestKind]json.RawMessage{RequestTitle: json.RawMessage(`{"title":"Too short"}`)}
+
+	if _, err := engine.Retitle(context.Background(), session.ID, options); err == nil {
+		t.Fatal("short retitle succeeded")
+	}
+	after, err := database.GetSession(context.Background(), session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Session.Title != before.Session.Title || after.Session.Summary != before.Session.Summary ||
+		after.Session.AnalysisStatus != "failed" || !strings.HasPrefix(after.Session.AnalysisError, "retitle:") {
+		t.Fatalf("analysis after failed retitle = %#v", after.Session)
+	}
+	ids, err := database.PendingAnalysisSessionIDs(context.Background(), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range ids {
+		if id == session.ID {
+			t.Fatalf("failed retitle was queued as full analysis: %v", ids)
+		}
+	}
+}
+
 func TestEngineLeafRangesCoverMessagesWithoutOverlap(t *testing.T) {
 	database, session := analysisFixture(t)
 	fake := &fakeAnalyzer{}
@@ -294,6 +383,8 @@ func (f *fakeAnalyzer) Generate(_ context.Context, _ string, request StructuredR
 		return json.RawMessage(`{"title":"Topic","summary":"Completed a coherent topic.","detail":"The topic contains implementation and verification.","evidence":[]}`), nil
 	case RequestSession:
 		return json.RawMessage(`{"title":"Focused development session","summary":"Completed two chronological development topics."}`), nil
+	case RequestTitle:
+		return json.RawMessage(`{"title":"Focused development session with specific implementation outcomes"}`), nil
 	default:
 		return nil, errors.New("unexpected request kind")
 	}

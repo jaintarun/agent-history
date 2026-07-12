@@ -78,8 +78,11 @@ snapshot. Generated summaries are replaceable cache data.
 
 ## Analysis
 
-Select **Analyze** or **Reanalyze** in the session detail view. One worker
-serializes requests and invokes authenticated `codex exec` in an ephemeral,
+Select **Analyze** or **Reanalyze** in the session detail view. **Retitle** makes
+one smaller model call over stored topic titles and summaries without rereading
+the transcript or regenerating summaries. **Retitle weak titles** queues only
+current titles that are short, generic, or duplicated. One worker serializes
+requests and invokes authenticated `codex exec` in an ephemeral,
 read-only temporary directory with schema-constrained output. The application
 does not store Codex credentials or API keys.
 
@@ -119,7 +122,8 @@ The embedded UI supports:
 - stable cursor pagination and last-active, started, or title sorting;
 - start, last activity, total span, source path, and native session ID;
 - overview, topic chapters, detailed evidence, and visible messages;
-- Analyze, Reanalyze, Delete analysis, Rescan, Scan, Settings, and Resume; and
+- Analyze, Reanalyze, Retitle, Retitle weak titles, Delete analysis, Rescan,
+  Scan, Settings, and Resume; and
 - keyboard result navigation and a responsive narrow layout.
 
 Delete analysis preserves imported messages. Resume uses only validated stored

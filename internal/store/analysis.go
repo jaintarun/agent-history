@@ -3,10 +3,128 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 )
+
+// UpdateSessionTitle atomically updates the visible title, current root node,
+// and full-text index without regenerating any summaries.
+func (s *Store) UpdateSessionTitle(ctx context.Context, sessionID, title string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin session retitle: %w", err)
+	}
+	defer tx.Rollback()
+	if err := requireSession(ctx, tx, sessionID); err != nil {
+		return err
+	}
+	rows, err := tx.QueryContext(ctx, `
+        SELECT id, summary_json FROM summary_nodes
+        WHERE session_id = ? AND kind = 'session'`, sessionID)
+	if err != nil {
+		return fmt.Errorf("query session summary node: %w", err)
+	}
+	type nodeUpdate struct {
+		id  string
+		raw []byte
+	}
+	var updates []nodeUpdate
+	for rows.Next() {
+		var id, raw string
+		if err := rows.Scan(&id, &raw); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan session summary node: %w", err)
+		}
+		var payload map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+			rows.Close()
+			return fmt.Errorf("decode session summary node: %w", err)
+		}
+		encodedTitle, err := json.Marshal(title)
+		if err != nil {
+			rows.Close()
+			return fmt.Errorf("encode session title: %w", err)
+		}
+		payload["title"] = encodedTitle
+		updated, err := json.Marshal(payload)
+		if err != nil {
+			rows.Close()
+			return fmt.Errorf("encode session summary node: %w", err)
+		}
+		updates = append(updates, nodeUpdate{id: id, raw: updated})
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("query session summary node: %w", err)
+	}
+	if len(updates) == 0 {
+		return errors.New("session summary node is missing")
+	}
+	now := formatTime(time.Now())
+	for _, update := range updates {
+		if _, err := tx.ExecContext(ctx, `
+            UPDATE summary_nodes SET summary_json = ?, updated_at = ? WHERE id = ?`,
+			string(update.raw), now, update.id); err != nil {
+			return fmt.Errorf("update session summary node: %w", err)
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `
+        UPDATE sessions SET title = ?, analysis_status = 'current',
+            analysis_error = NULL, updated_at = ? WHERE id = ?`, title, now, sessionID); err != nil {
+		return fmt.Errorf("update session title: %w", err)
+	}
+	if err := rebuildSessionFTS(ctx, tx, sessionID); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit session retitle: %w", err)
+	}
+	return nil
+}
+
+// WeakTitleSessionIDs returns current sessions whose titles are short, generic,
+// or duplicated case-insensitively.
+func (s *Store) WeakTitleSessionIDs(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `
+        WITH duplicate_titles AS (
+            SELECT lower(trim(title)) AS normalized
+            FROM sessions
+            WHERE analysis_status = 'current' AND trim(COALESCE(title, '')) <> ''
+            GROUP BY lower(trim(title)) HAVING count(*) > 1
+        )
+        SELECT sessions.id
+        FROM sessions
+        WHERE sessions.analysis_status = 'current'
+          AND (
+              length(trim(COALESCE(sessions.title, ''))) < 35
+              OR lower(sessions.title) LIKE 'transcript summary%'
+              OR lower(sessions.title) LIKE 'session summary%'
+              OR lower(sessions.title) LIKE 'summary:%'
+              OR lower(trim(sessions.title)) IN (SELECT normalized FROM duplicate_titles)
+          )
+        ORDER BY sessions.last_active_at DESC, sessions.id`)
+	if err != nil {
+		return nil, fmt.Errorf("list weak session titles: %w", err)
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan weak session title: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list weak session titles: %w", err)
+	}
+	return ids, nil
+}
 
 // ReplaceAnalysis atomically replaces visible analysis and its summary tree.
 func (s *Store) ReplaceAnalysis(ctx context.Context, sessionID string, analysis Analysis) error {
@@ -134,7 +252,8 @@ func (s *Store) PendingAnalysisSessionIDs(ctx context.Context, includeFailed boo
         FROM sessions
         WHERE (
               sessions.analysis_status IN ('none', 'partial')
-              OR (? AND sessions.analysis_status = 'failed')
+              OR (? AND sessions.analysis_status = 'failed'
+                  AND COALESCE(sessions.analysis_error, '') NOT LIKE 'retitle:%')
           )
           AND EXISTS (
               SELECT 1 FROM messages WHERE messages.session_id = sessions.id

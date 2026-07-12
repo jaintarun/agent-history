@@ -82,6 +82,41 @@ func TestWorkerRejectsSessionWithoutVisibleMessages(t *testing.T) {
 	}
 }
 
+func TestWorkerQueuesRetitleAfterAnalysis(t *testing.T) {
+	database, session := analysisFixture(t)
+	analyzer := &trackingAnalyzer{}
+	worker := NewWorker(database, NewEngine(database, map[string]Analyzer{"tracking": analyzer}), 2)
+	t.Cleanup(worker.Close)
+	options := Options{
+		Provider: "tracking", Model: "test", PromptVersion: "v1",
+		NormalizerVersion: "v1", LeafTargetChars: 10_000, RollupFanout: 8,
+	}
+	if _, err := worker.EnqueueRetitle(context.Background(), session.ID, options); !errors.Is(err, ErrNoTopics) {
+		t.Fatalf("retitle without topics error = %v", err)
+	}
+	done, err := worker.Enqueue(context.Background(), session.ID, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	done, err = worker.EnqueueRetitle(context.Background(), session.ID, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	detail, err := database.GetSession(context.Background(), session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail.Session.Title != "Specific retitled development session with implementation outcomes" || detail.Session.AnalysisStatus != "current" {
+		t.Fatalf("retitled session = %#v", detail.Session)
+	}
+}
+
 type trackingAnalyzer struct {
 	mu        sync.Mutex
 	active    int
@@ -106,6 +141,8 @@ func (a *trackingAnalyzer) Generate(_ context.Context, _ string, request Structu
 		return json.RawMessage(`{"title":"Topic","summary":"Summary","detail":"Detail","evidence":[]}`), nil
 	case RequestBoundary:
 		return json.RawMessage(`{"same_topic":true,"confidence":1,"new_title":""}`), nil
+	case RequestTitle:
+		return json.RawMessage(`{"title":"Specific retitled development session with implementation outcomes"}`), nil
 	default:
 		return json.RawMessage(`{"title":"Session","summary":"Summary"}`), nil
 	}

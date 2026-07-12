@@ -247,13 +247,19 @@ function actionButtons(session) {
   analyze.type = "button";
   analyze.disabled = session.analysis_status === "queued" || session.analysis_status === "running";
   analyze.addEventListener("click", () => mutateSession(session.id, "/analyze", "POST", { full: session.analysis_status !== "none" }, "Analysis queued"));
+  const retitle = element("button", "", "Retitle");
+  retitle.type = "button";
+  retitle.disabled = session.analysis_status === "queued" || session.analysis_status === "running";
+  retitle.addEventListener("click", () => mutateSession(session.id, "/retitle", "POST", {}, "Retitle queued"));
   const rescan = element("button", "", "Rescan");
   rescan.type = "button";
   rescan.addEventListener("click", () => mutateSession(session.id, "/rescan", "POST", {}, "Session rescanned"));
   const resume = element("button", "", "Resume");
   resume.type = "button";
   resume.addEventListener("click", () => resumeSession(session.id));
-  actions.append(analyze, rescan, resume);
+  actions.append(analyze);
+  if (session.topics?.length) actions.append(retitle);
+  actions.append(rescan, resume);
   if (session.analysis_status !== "none" || session.title) {
     const remove = element("button", "danger", "Delete analysis");
     remove.type = "button";
@@ -404,6 +410,17 @@ elements["scan-button"].addEventListener("click", async () => {
   try { await request("/scan", { method: "POST", body: JSON.stringify({ agent: "all" }) }); toast("History scan complete"); await loadSessions(false); await loadFacets(); }
   catch (error) { toast(error.message, true); }
   finally { elements["scan-button"].disabled = false; }
+});
+elements["retitle-weak-button"].addEventListener("click", async () => {
+  if (!window.confirm("Queue title-only model calls for all weak titles?")) return;
+  elements["retitle-weak-button"].disabled = true;
+  try {
+    const result = await request("/retitle-weak", { method: "POST", body: JSON.stringify({}) });
+    toast(`${result.queued} of ${result.matched} weak titles queued`);
+    await loadSessions(false);
+    await loadFacets();
+  } catch (error) { toast(error.message, true); }
+  finally { elements["retitle-weak-button"].disabled = false; }
 });
 elements["settings-button"].addEventListener("click", openSettings);
 elements["settings-cancel"].addEventListener("click", () => elements["settings-dialog"].close());

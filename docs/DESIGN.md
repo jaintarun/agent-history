@@ -155,6 +155,10 @@ The detail view exposes only the core actions:
 - **Analyze**: create analysis for an unanalyzed session.
 - **Reanalyze**: replace title, summary, and segments after a new analysis
   succeeds.
+- **Retitle**: generate one catalog title from stored topic titles and summaries
+  without rereading the transcript or replacing other analysis.
+- **Retitle weak titles**: queue title-only jobs for short, generic, or duplicate
+  current titles.
 - **Delete analysis**: remove generated analysis while preserving messages.
 - **Rescan**: reread the source transcript and update normalized messages.
 - **Resume**: launch the original session or provide a copyable resume command.
@@ -343,6 +347,12 @@ new topic title rather than re-reading the transcript.
 Sealed leaves roll into user-visible topic nodes. Topic summaries roll into the
 session title and overview. Very large topics may use fixed-fanout intermediate
 rollup nodes, but those nodes are internal and do not add UI hierarchy.
+
+A title-only refinement may run after the hierarchy is complete. It receives
+only session metadata plus topic titles and summaries, targets a specific
+8-16-word catalog title, and atomically updates the session title, root node,
+and FTS document. Failure preserves the previous title and summaries. Retitle
+jobs share the serialized analysis worker.
 
 ```text
 Session overview
@@ -551,11 +561,13 @@ GET    /api/sessions/{id}/messages
 GET    /api/sessions/facets
 
 POST   /api/sessions/{id}/analyze
+POST   /api/sessions/{id}/retitle
 DELETE /api/sessions/{id}/analysis
 POST   /api/sessions/{id}/rescan
 POST   /api/sessions/{id}/launch
 
 POST   /api/scan
+POST   /api/retitle-weak
 GET    /api/settings
 PUT    /api/settings
 ```

@@ -108,7 +108,7 @@ func TestWebApplicationIncludesCoreWorkflows(t *testing.T) {
 		"session-search", "agent-filter", "active-filter", "cwd-filter", "topic-filter",
 		"status-filter", "sort-filter", "active-after-filter", "active-before-filter",
 		"started-after-filter", "started-before-filter", "session-results", "detail-content",
-		"confirm-dialog", "command-dialog", "settings-dialog",
+		"confirm-dialog", "command-dialog", "settings-dialog", "retitle-weak-button",
 	} {
 		if !strings.Contains(markup, `id="`+id+`"`) {
 			t.Errorf("embedded HTML missing control %q", id)
@@ -184,6 +184,26 @@ func TestMutationEndpoints(t *testing.T) {
 		t.Fatalf("queued jobs = %#v", queue.jobs)
 	}
 	queue.mu.Unlock()
+
+	response = serve(handler, jsonRequest(http.MethodPost, "/test-token/api/sessions/session-1/retitle", `{}`))
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("retitle status = %d body=%s", response.Code, response.Body.String())
+	}
+	queue.mu.Lock()
+	if len(queue.jobs) != 2 || queue.jobs[1].kind != "retitle" || queue.jobs[1].sessionID != "session-1" {
+		t.Fatalf("retitle jobs = %#v", queue.jobs)
+	}
+	queue.mu.Unlock()
+
+	response = serve(handler, jsonRequest(http.MethodPost, "/test-token/api/retitle-weak", `{}`))
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("bulk retitle status = %d body=%s", response.Code, response.Body.String())
+	}
+	var bulk map[string]int
+	decodeResponse(t, response, &bulk)
+	if bulk["matched"] != 1 || bulk["queued"] != 1 {
+		t.Fatalf("bulk retitle response = %#v", bulk)
+	}
 
 	response = serve(handler, jsonRequest(http.MethodPost, "/test-token/api/scan", `{"agent":"codex"}`))
 	if response.Code != http.StatusOK || scanner.scanAgent != "codex" {
@@ -315,6 +335,7 @@ func (s *fakeScanner) Rescan(_ context.Context, sessionID string) (store.ImportR
 type queuedJob struct {
 	sessionID string
 	options   analyze.Options
+	kind      string
 }
 
 type fakeQueue struct {
@@ -324,12 +345,20 @@ type fakeQueue struct {
 }
 
 func (q *fakeQueue) Enqueue(_ context.Context, sessionID string, options analyze.Options) (<-chan error, error) {
+	return q.enqueue(sessionID, options, "analysis")
+}
+
+func (q *fakeQueue) EnqueueRetitle(_ context.Context, sessionID string, options analyze.Options) (<-chan error, error) {
+	return q.enqueue(sessionID, options, "retitle")
+}
+
+func (q *fakeQueue) enqueue(sessionID string, options analyze.Options, kind string) (<-chan error, error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if q.err != nil {
 		return nil, q.err
 	}
-	q.jobs = append(q.jobs, queuedJob{sessionID: sessionID, options: options})
+	q.jobs = append(q.jobs, queuedJob{sessionID: sessionID, options: options, kind: kind})
 	done := make(chan error, 1)
 	done <- nil
 	close(done)

@@ -13,6 +13,8 @@ var (
 	ErrAlreadyQueued = errors.New("analysis is already queued or running")
 	// ErrNoVisibleMessages rejects sessions that contain nothing safe to analyze.
 	ErrNoVisibleMessages = errors.New("session has no visible messages to analyze")
+	// ErrNoTopics rejects retitling before a topic hierarchy exists.
+	ErrNoTopics = errors.New("session has no topic summaries to retitle")
 )
 
 // Worker serializes analysis requests to protect subscription usage.
@@ -30,8 +32,16 @@ type Worker struct {
 type queuedAnalysis struct {
 	sessionID string
 	options   Options
+	kind      queueKind
 	done      chan error
 }
+
+type queueKind string
+
+const (
+	queueAnalysis queueKind = "analysis"
+	queueRetitle  queueKind = "retitle"
+)
 
 // NewWorker starts one analysis worker with bounded queue capacity.
 func NewWorker(database *store.Store, engine *Engine, queueCapacity int) *Worker {
@@ -58,6 +68,23 @@ func (w *Worker) Enqueue(ctx context.Context, sessionID string, options Options)
 	if len(detail.Messages) == 0 {
 		return nil, ErrNoVisibleMessages
 	}
+	return w.enqueue(ctx, sessionID, options, queueAnalysis)
+}
+
+// EnqueueRetitle schedules one title-only model call through the same serialized
+// worker used by full analysis.
+func (w *Worker) EnqueueRetitle(ctx context.Context, sessionID string, options Options) (<-chan error, error) {
+	detail, err := w.store.GetSession(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	if len(detail.Segments) == 0 {
+		return nil, ErrNoTopics
+	}
+	return w.enqueue(ctx, sessionID, options, queueRetitle)
+}
+
+func (w *Worker) enqueue(ctx context.Context, sessionID string, options Options, kind queueKind) (<-chan error, error) {
 	w.mu.Lock()
 	if w.pending[sessionID] {
 		w.mu.Unlock()
@@ -75,7 +102,7 @@ func (w *Worker) Enqueue(ctx context.Context, sessionID string, options Options)
 		return nil, err
 	}
 	done := make(chan error, 1)
-	job := queuedAnalysis{sessionID: sessionID, options: options, done: done}
+	job := queuedAnalysis{sessionID: sessionID, options: options, kind: kind, done: done}
 	select {
 	case w.queue <- job:
 		return done, nil
@@ -103,7 +130,12 @@ func (w *Worker) run() {
 			w.drain()
 			return
 		case job := <-w.queue:
-			_, err := w.engine.Analyze(w.ctx, job.sessionID, job.options)
+			var err error
+			if job.kind == queueRetitle {
+				_, err = w.engine.Retitle(w.ctx, job.sessionID, job.options)
+			} else {
+				_, err = w.engine.Analyze(w.ctx, job.sessionID, job.options)
+			}
 			w.removePending(job.sessionID)
 			job.done <- err
 			close(job.done)

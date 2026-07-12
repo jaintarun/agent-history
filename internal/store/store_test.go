@@ -148,10 +148,93 @@ func TestReplaceAnalysisIsAtomicAndDeletePreservesMessages(t *testing.T) {
 	}
 }
 
+func TestUpdateSessionTitleUpdatesRootNodeAndFTS(t *testing.T) {
+	database := openTestStore(t)
+	ctx := context.Background()
+	session := testSession("retitle-session")
+	if err := database.UpsertSession(ctx, session); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.ReplaceMessages(ctx, session.ID, []Message{{
+		Sequence: 0, Timestamp: session.StartedAt, Role: "user", Text: "queue work",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.ReplaceAnalysis(ctx, session.ID, Analysis{
+		Title: "Old title", Summary: "The summary stays unchanged.", Status: "current",
+		Provider: "fake", Model: "test", PromptVersion: "v1", AnalyzedAt: session.LastActiveAt,
+		AnalyzedHash: "hash", AnalyzedThroughSequence: intPointer(0), AnalyzedThroughAt: session.LastActiveAt,
+		Segments: []Segment{{Position: 0, StartSequence: 0, EndSequence: 0, Title: "Queue", Summary: "Queue work", Detail: "Details"}},
+		Nodes: []SummaryNode{{
+			ID: "retitle-root", Kind: "session", Position: 0, StartSequence: 0, EndSequence: 0,
+			InputHash: "input", SummaryJSON: `{"title":"Old title","summary":"The summary stays unchanged."}`,
+			Sealed: true, Provider: "fake", Model: "test", PromptVersion: "v1", NormalizerVersion: "v1",
+			CreatedAt: session.StartedAt, UpdatedAt: session.StartedAt,
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	const newTitle = "Queue recovery and serialized local analysis worker improvements"
+	if err := database.UpdateSessionTitle(ctx, session.ID, newTitle); err != nil {
+		t.Fatal(err)
+	}
+	detail, err := database.GetSession(ctx, session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail.Session.Title != newTitle || detail.Session.Summary != "The summary stays unchanged." || detail.Session.AnalysisStatus != "current" {
+		t.Fatalf("retitled session = %#v", detail.Session)
+	}
+	nodes, err := database.SummaryNodes(ctx, session.ID, "session", "fake", "test", "v1", "v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nodes) != 1 || !strings.Contains(nodes[0].SummaryJSON, newTitle) {
+		t.Fatalf("retitled root nodes = %#v", nodes)
+	}
+	result, err := database.SearchSessions(ctx, SearchQuery{Text: "serialized local analysis", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Hits) != 1 || result.Hits[0].Session.ID != session.ID {
+		t.Fatalf("retitled FTS hits = %#v", result.Hits)
+	}
+}
+
+func TestWeakTitleSessionIDsFindsShortGenericAndDuplicateTitles(t *testing.T) {
+	database := openTestStore(t)
+	ctx := context.Background()
+	titles := map[string]string{
+		"short":   "Tiny title",
+		"generic": "Transcript summary: queue work",
+		"dup-1":   "Implementing queue recovery across local analysis workers",
+		"dup-2":   "Implementing queue recovery across local analysis workers",
+		"good":    "Diagnosing macOS audio output devices and restoring speaker selection",
+	}
+	for id, title := range titles {
+		session := testSession(id)
+		if err := database.UpsertSession(ctx, session); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := database.db.Exec(`UPDATE sessions SET title = ?, analysis_status = 'current' WHERE id = ?`, title, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	ids, err := database.WeakTitleSessionIDs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.Join(ids, ","), "dup-1,dup-2,generic,short"; got != want {
+		t.Fatalf("WeakTitleSessionIDs = %q, want %q", got, want)
+	}
+}
+
 func TestPendingAnalysisSessionIDsExcludesEmptyCurrentAndFailedSessions(t *testing.T) {
 	database := openTestStore(t)
 	ctx := context.Background()
-	for _, id := range []string{"none", "partial", "failed", "current", "empty"} {
+	for _, id := range []string{"none", "partial", "failed", "retitle-failed", "current", "empty"} {
 		session := testSession(id)
 		if err := database.UpsertSession(ctx, session); err != nil {
 			t.Fatal(err)
@@ -164,7 +247,11 @@ func TestPendingAnalysisSessionIDsExcludesEmptyCurrentAndFailedSessions(t *testi
 			}
 		}
 		if id != "none" && id != "empty" {
-			if err := database.SetAnalysisStatus(ctx, id, id, ""); err != nil {
+			status, message := id, ""
+			if id == "retitle-failed" {
+				status, message = "failed", "retitle: provider interrupted"
+			}
+			if err := database.SetAnalysisStatus(ctx, id, status, message); err != nil {
 				t.Fatal(err)
 			}
 		}

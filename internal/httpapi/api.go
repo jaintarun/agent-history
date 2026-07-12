@@ -39,6 +39,7 @@ type Scanner interface {
 // AnalysisQueue is the serialized analysis boundary.
 type AnalysisQueue interface {
 	Enqueue(context.Context, string, analyze.Options) (<-chan error, error)
+	EnqueueRetitle(context.Context, string, analyze.Options) (<-chan error, error)
 }
 
 // Launcher is the trusted session-launch boundary.
@@ -120,7 +121,9 @@ func (h *handler) routes() {
 	h.mux.HandleFunc("GET /api/sessions/{id}", h.sessionDetail)
 	h.mux.HandleFunc("GET /api/sessions/{id}/messages", h.messages)
 	h.mux.HandleFunc("POST /api/sessions/{id}/analyze", h.analyze)
+	h.mux.HandleFunc("POST /api/sessions/{id}/retitle", h.retitle)
 	h.mux.HandleFunc("DELETE /api/sessions/{id}/analysis", h.deleteAnalysis)
+	h.mux.HandleFunc("POST /api/retitle-weak", h.retitleWeak)
 	h.mux.HandleFunc("POST /api/sessions/{id}/rescan", h.rescan)
 	h.mux.HandleFunc("POST /api/sessions/{id}/launch", h.launch)
 	h.mux.HandleFunc("POST /api/scan", h.scan)
@@ -312,6 +315,86 @@ func (h *handler) analyze(response http.ResponseWriter, request *http.Request) {
 		return
 	}
 	writeJSON(response, http.StatusAccepted, map[string]string{"status": "queued"})
+}
+
+func (h *handler) retitle(response http.ResponseWriter, request *http.Request) {
+	if h.queue == nil {
+		writeError(response, http.StatusNotImplemented, "analysis_unavailable", "analysis is not configured")
+		return
+	}
+	var body struct{}
+	if err := decodeJSONBody(response, request, &body); err != nil {
+		writeError(response, http.StatusBadRequest, "invalid_json", err.Error())
+		return
+	}
+	options, err := h.savedAnalysisOptions(request.Context())
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "settings_error", "could not load analysis settings")
+		return
+	}
+	if _, err := h.queue.EnqueueRetitle(request.Context(), request.PathValue("id"), options); err != nil {
+		h.retitleError(response, err)
+		return
+	}
+	writeJSON(response, http.StatusAccepted, map[string]string{"status": "queued"})
+}
+
+func (h *handler) retitleWeak(response http.ResponseWriter, request *http.Request) {
+	if h.queue == nil {
+		writeError(response, http.StatusNotImplemented, "analysis_unavailable", "analysis is not configured")
+		return
+	}
+	var body struct{}
+	if err := decodeJSONBody(response, request, &body); err != nil {
+		writeError(response, http.StatusBadRequest, "invalid_json", err.Error())
+		return
+	}
+	ids, err := h.store.WeakTitleSessionIDs(request.Context())
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "store_error", "could not find weak titles")
+		return
+	}
+	options, err := h.savedAnalysisOptions(request.Context())
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "settings_error", "could not load analysis settings")
+		return
+	}
+	queued := 0
+	for _, id := range ids {
+		if _, err := h.queue.EnqueueRetitle(request.Context(), id, options); err != nil {
+			if !errors.Is(err, analyze.ErrAlreadyQueued) {
+				h.logger.Error("could not queue weak-title retitle", "session_id", id, "error", err)
+			}
+			continue
+		}
+		queued++
+	}
+	writeJSON(response, http.StatusAccepted, map[string]int{"matched": len(ids), "queued": queued})
+}
+
+func (h *handler) savedAnalysisOptions(ctx context.Context) (analyze.Options, error) {
+	settings, err := h.settings(ctx)
+	if err != nil {
+		return analyze.Options{}, err
+	}
+	options := h.analysisDefaults
+	options.Provider = settings.AnalysisProvider
+	options.Model = settings.AnalysisModel
+	options.Full = false
+	return options, nil
+}
+
+func (h *handler) retitleError(response http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, analyze.ErrAlreadyQueued):
+		writeError(response, http.StatusConflict, "already_queued", err.Error())
+	case errors.Is(err, analyze.ErrNoTopics):
+		writeError(response, http.StatusUnprocessableEntity, "no_topics", err.Error())
+	case errors.Is(err, store.ErrNotFound):
+		writeError(response, http.StatusNotFound, "not_found", "session not found")
+	default:
+		writeError(response, http.StatusServiceUnavailable, "analysis_error", err.Error())
+	}
 }
 
 func (h *handler) deleteAnalysis(response http.ResponseWriter, request *http.Request) {

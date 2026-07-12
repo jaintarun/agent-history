@@ -331,7 +331,8 @@ Every frontend workflow can be completed with HTTP requests alone.
   - normalized message excerpts and show-tools toggle;
   - analysis state and errors;
   - analyzed-through status for sessions with new unsealed conversation;
-  - Analyze, Reanalyze, Delete analysis, Rescan, and Resume actions;
+  - Analyze, Reanalyze, Retitle, bulk weak-title retitling, Delete analysis,
+    Rescan, and Resume actions;
   - confirmation for analysis deletion;
   - copyable resume-command fallback;
   - keyboard result navigation and focus handling.
