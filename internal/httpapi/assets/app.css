@@ -133,9 +133,15 @@ dialog input[type="text"] { width: 100%; }
   .detail-header, .summary-band, .detail-section { padding-left: 14px; padding-right: 14px; }
 }
 
+@media (max-width: 480px) {
+  .app-header { display: block; }
+  .brand-block { margin-bottom: 8px; padding-top: 0; }
+  .header-actions { justify-content: flex-start; gap: 6px; }
+  .header-actions button { padding: 0 8px; }
+}
+
 @media (max-width: 430px) {
   .brand-block { display: block; }
-  .header-actions button { padding: 0 8px; }
   .filter-bar { padding: 8px; gap: 6px; }
   .filter-chips { padding-left: 8px; padding-right: 8px; }
   .metadata-grid { grid-template-columns: 1fr; gap: 8px; }

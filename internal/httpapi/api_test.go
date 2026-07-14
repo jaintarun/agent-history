@@ -146,6 +146,8 @@ func TestWebApplicationIncludesCoreWorkflows(t *testing.T) {
 		"#refresh-button { width: 126px;",
 		".refresh-countdown { color: var(--text-muted);",
 		"font-variant-numeric: tabular-nums;",
+		"@media (max-width: 480px)",
+		".header-actions { justify-content: flex-start; gap: 6px; }",
 	} {
 		if !strings.Contains(styles, style) {
 			t.Errorf("embedded CSS missing refresh style %q", style)
