@@ -61,7 +61,29 @@ It serves directly at `http://127.0.0.1:54321/`, scans Codex and Claude history
 at startup and every 15 minutes, and serially queues nonempty sessions that are
 unanalyzed or have new activity. A failed analysis is retried once when the
 process starts, but periodic scans do not repeatedly retry failures. Stop the
-foreground process with `Ctrl-C`; run the same script after a reboot.
+foreground process with `Ctrl-C`.
+
+To start this fixed local service automatically after logging in to macOS:
+
+```sh
+./install-startup.sh
+```
+
+The idempotent installer creates and loads the per-user LaunchAgent
+`com.tarunjain.agent-history`. It keeps the service running, uses the same
+`run-local.sh` command, and writes output to
+`~/Library/Logs/agent-history.log` and errors to
+`~/Library/Logs/agent-history.error.log`. Running the installer again does not
+create another job.
+
+To stop the job and remove automatic startup:
+
+```sh
+./uninstall-startup.sh
+```
+
+The uninstaller is also idempotent. It does not delete the application,
+configuration, imported conversations, summaries, or SQLite database.
 
 Run `agent-history serve --help` for bind, database, config, browser, and scan
 flags.
