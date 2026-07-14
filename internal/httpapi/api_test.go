@@ -109,6 +109,7 @@ func TestWebApplicationIncludesCoreWorkflows(t *testing.T) {
 		"status-filter", "sort-filter", "active-after-filter", "active-before-filter",
 		"started-after-filter", "started-before-filter", "session-results", "detail-content",
 		"confirm-dialog", "command-dialog", "settings-dialog", "retitle-weak-button", "refresh-button",
+		"refresh-label", "refresh-countdown",
 	} {
 		if !strings.Contains(markup, `id="`+id+`"`) {
 			t.Errorf("embedded HTML missing control %q", id)
@@ -129,10 +130,25 @@ func TestWebApplicationIncludesCoreWorkflows(t *testing.T) {
 		"function startRefreshCountdown()",
 		"async function refreshPageData()",
 		"await loadSessions(false);",
+		`elements["refresh-countdown"].textContent = `,
 		`elements["refresh-button"].addEventListener("click", refreshPageData);`,
 	} {
 		if !strings.Contains(script, behavior) {
 			t.Errorf("embedded JavaScript missing refresh behavior %q", behavior)
+		}
+	}
+	css, err := webAssets.ReadFile("assets/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	styles := string(css)
+	for _, style := range []string{
+		"#refresh-button { width: 126px;",
+		".refresh-countdown { color: var(--text-muted);",
+		"font-variant-numeric: tabular-nums;",
+	} {
+		if !strings.Contains(styles, style) {
+			t.Errorf("embedded CSS missing refresh style %q", style)
 		}
 	}
 }

@@ -150,7 +150,8 @@ async function loadSessions(append) {
 }
 
 function updateRefreshButton() {
-  elements["refresh-button"].textContent = `Refresh in ${refreshSeconds}s`;
+  elements["refresh-label"].textContent = "Refresh";
+  elements["refresh-countdown"].textContent = `in ${refreshSeconds}s`;
 }
 
 function startRefreshCountdown() {
@@ -170,7 +171,8 @@ function startRefreshCountdown() {
 async function refreshPageData() {
   clearInterval(refreshTimer);
   elements["refresh-button"].disabled = true;
-  elements["refresh-button"].textContent = "Refreshing...";
+  elements["refresh-label"].textContent = "Refreshing...";
+  elements["refresh-countdown"].textContent = "";
   try {
     await loadSessions(false);
   } finally {
