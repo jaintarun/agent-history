@@ -3,6 +3,9 @@
 const basePath = location.pathname.endsWith("/") ? location.pathname : location.pathname + "/";
 const apiPath = basePath + "api";
 const state = { sessions: [], nextCursor: "", selectedID: "", searchAbort: null, pollTimer: null };
+const refreshIntervalSeconds = 60;
+let refreshSeconds = refreshIntervalSeconds;
+let refreshTimer;
 const elements = Object.fromEntries(Array.from(document.querySelectorAll("[id]")).map((element) => [element.id, element]));
 const filterIDs = [
   "session-search", "agent-filter", "active-filter", "cwd-filter", "topic-filter", "status-filter", "sort-filter",
@@ -143,6 +146,36 @@ async function loadSessions(append) {
     if (!append && state.selectedID) await selectSession(state.selectedID, false);
   } catch (error) {
     if (error.name !== "AbortError") elements["results-status"].textContent = error.message;
+  }
+}
+
+function updateRefreshButton() {
+  elements["refresh-button"].textContent = `Refresh in ${refreshSeconds}s`;
+}
+
+function startRefreshCountdown() {
+  clearInterval(refreshTimer);
+  refreshSeconds = refreshIntervalSeconds;
+  updateRefreshButton();
+  refreshTimer = setInterval(() => {
+    refreshSeconds -= 1;
+    if (refreshSeconds <= 0) {
+      void refreshPageData();
+      return;
+    }
+    updateRefreshButton();
+  }, 1000);
+}
+
+async function refreshPageData() {
+  clearInterval(refreshTimer);
+  elements["refresh-button"].disabled = true;
+  elements["refresh-button"].textContent = "Refreshing...";
+  try {
+    await loadSessions(false);
+  } finally {
+    elements["refresh-button"].disabled = false;
+    startRefreshCountdown();
   }
 }
 
@@ -387,6 +420,7 @@ for (const id of filterIDs) {
   elements[id].addEventListener(eventName, applyFilters);
 }
 elements["load-more"].addEventListener("click", () => loadSessions(true));
+elements["refresh-button"].addEventListener("click", refreshPageData);
 elements["session-results"].addEventListener("keydown", (event) => {
   if (event.key !== "ArrowDown" && event.key !== "ArrowUp" && event.key !== "Enter") return;
   const rows = Array.from(elements["session-results"].children);
@@ -441,3 +475,4 @@ restoreFilters();
 renderFilterChips();
 loadFacets();
 loadSessions(false);
+startRefreshCountdown();

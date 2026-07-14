@@ -108,7 +108,7 @@ func TestWebApplicationIncludesCoreWorkflows(t *testing.T) {
 		"session-search", "agent-filter", "active-filter", "cwd-filter", "topic-filter",
 		"status-filter", "sort-filter", "active-after-filter", "active-before-filter",
 		"started-after-filter", "started-before-filter", "session-results", "detail-content",
-		"confirm-dialog", "command-dialog", "settings-dialog", "retitle-weak-button",
+		"confirm-dialog", "command-dialog", "settings-dialog", "retitle-weak-button", "refresh-button",
 	} {
 		if !strings.Contains(markup, `id="`+id+`"`) {
 			t.Errorf("embedded HTML missing control %q", id)
@@ -122,6 +122,17 @@ func TestWebApplicationIncludesCoreWorkflows(t *testing.T) {
 	for _, workflow := range []string{"/analyze", "/analysis", "/rescan", "/launch", "/scan", "/settings"} {
 		if !strings.Contains(script, workflow) {
 			t.Errorf("embedded JavaScript missing workflow %q", workflow)
+		}
+	}
+	for _, behavior := range []string{
+		"const refreshIntervalSeconds = 60;",
+		"function startRefreshCountdown()",
+		"async function refreshPageData()",
+		"await loadSessions(false);",
+		`elements["refresh-button"].addEventListener("click", refreshPageData);`,
+	} {
+		if !strings.Contains(script, behavior) {
+			t.Errorf("embedded JavaScript missing refresh behavior %q", behavior)
 		}
 	}
 }

@@ -583,6 +583,8 @@ still supporting:
 
 - URL-backed search and filter state;
 - paginated result loading;
+- one-minute in-place data refresh with a manual countdown control that
+  preserves current filters and selection;
 - keyboard navigation through results;
 - an accessible desktop split view and stacked narrow layout;
 - topic expansion and message excerpts;
