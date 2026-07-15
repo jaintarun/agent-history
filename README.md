@@ -12,7 +12,8 @@ Requirements:
 - macOS;
 - Go 1.24 or newer (the module selects a patched preferred toolchain);
 - an authenticated Codex CLI for analysis; and
-- optional `cmux` for one-click session launch.
+- optional `cmux` for one-click session launch, live session status, and title
+  synchronization.
 
 Build from this repository:
 
@@ -140,7 +141,7 @@ The embedded UI supports:
 - full-text search over summaries, topics, visible messages, retained tool
   facts, errors, filenames, and working directories;
 - agent, last-active preset, exact active/started range, folder, topic-count,
-  and analysis-state filters;
+  analysis-state, and open-in-cmux filters;
 - stable cursor pagination and last-active, started, or title sorting;
 - start, last activity, total span, source path, and native session ID;
 - overview, topic chapters, detailed evidence, and visible messages;
@@ -151,6 +152,35 @@ The embedded UI supports:
 Delete analysis preserves imported messages. Resume uses only validated stored
 metadata. `auto` launches `cmux workspace create` when cmux is installed;
 otherwise the UI returns a safely quoted resume command to copy.
+
+## cmux Status And Title Sync
+
+Agent History can match an imported Claude or Codex session to an open cmux
+tab using cmux's native hook session ID. It does not infer matches from titles,
+folders, or timestamps. Enable direct local socket access once on this Mac:
+
+```sh
+defaults write com.cmuxterm.app socketControlMode -string allowAll
+defaults write com.cmuxterm.app workspaceAutoNamingEnabled -bool false
+cmux capabilities --json
+```
+
+The capabilities response must report `"access_mode": "allowAll"`. Agent
+History then refreshes cmux state at startup and every minute. The web page can
+filter sessions by `Open in cmux`, shows the current workspace or exact tab
+title beside the generated title, and provides an explicit **Send Agent
+History title to cmux** action when they differ.
+
+Automatic title sync is off by default. Enable **Automatically sync titles to
+cmux** in Settings to opt in. Automatic sync writes only a current generated
+title in a workspace containing one matched agent session, and it preserves a
+cmux title changed independently. The explicit send action may replace a
+different title; in a workspace with multiple matched sessions it renames only
+the exact tab.
+
+If cmux is closed, its socket is inaccessible, or access is not `allowAll`, the
+Settings dialog reports cmux as unavailable. History scanning, analysis,
+search, and browsing continue normally.
 
 ## Privacy And Security
 
@@ -168,6 +198,7 @@ otherwise the UI returns a safely quoted resume command to copy.
 - Settings reject secret-like keys and never return inherited credentials.
 - cmux argv is generated from validated source metadata; the browser cannot
   submit an executable or arbitrary command.
+- cmux socket paths and raw connection errors are not returned by the web API.
 
 Individual transcripts are limited to 4 GB and individual JSONL records to 64
 MB. These bounds accommodate the measured long-session corpus while preventing

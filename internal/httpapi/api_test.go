@@ -73,10 +73,11 @@ func TestEmbeddedWebApplication(t *testing.T) {
 		path        string
 		contentType string
 		contains    string
+		cache       string
 	}{
-		{path: "/test-token/", contentType: "text/html", contains: `id="session-search"`},
-		{path: "/test-token/assets/app.css", contentType: "text/css", contains: ":root"},
-		{path: "/test-token/assets/app.js", contentType: "text/javascript", contains: "fetch("},
+		{path: "/test-token/", contentType: "text/html", contains: `assets/app.js?v=2`, cache: "no-store"},
+		{path: "/test-token/assets/app.css?v=2", contentType: "text/css", contains: ":root", cache: "no-store"},
+		{path: "/test-token/assets/app.js?v=2", contentType: "text/javascript", contains: "fetch(", cache: "no-store"},
 	}
 	for _, test := range tests {
 		response := serve(handler, apiRequest(http.MethodGet, test.path, nil))
@@ -92,6 +93,9 @@ func TestEmbeddedWebApplication(t *testing.T) {
 		if response.Header().Get("Content-Security-Policy") == "" {
 			t.Errorf("GET %s missing Content-Security-Policy", test.path)
 		}
+		if got := response.Header().Get("Cache-Control"); got != test.cache {
+			t.Errorf("GET %s Cache-Control = %q, want %q", test.path, got, test.cache)
+		}
 		if strings.Contains(response.Body.String(), "https://") || strings.Contains(response.Body.String(), "http://") {
 			t.Errorf("GET %s contains external asset reference", test.path)
 		}
@@ -105,33 +109,42 @@ func TestWebApplicationIncludesCoreWorkflows(t *testing.T) {
 	}
 	markup := string(html)
 	for _, id := range []string{
-		"session-search", "agent-filter", "active-filter", "cwd-filter", "topic-filter",
+		"session-search", "agent-filter", "active-filter", "cmux-filter", "cwd-filter", "topic-filter",
 		"status-filter", "sort-filter", "active-after-filter", "active-before-filter",
 		"started-after-filter", "started-before-filter", "session-results", "detail-content",
 		"confirm-dialog", "command-dialog", "settings-dialog", "retitle-weak-button", "refresh-button",
-		"refresh-label", "refresh-countdown",
+		"refresh-label", "refresh-countdown", "settings-cmux-sync", "settings-cmux-status",
 	} {
 		if !strings.Contains(markup, `id="`+id+`"`) {
 			t.Errorf("embedded HTML missing control %q", id)
 		}
+	}
+	if !strings.Contains(markup, "Automatically sync titles to cmux") {
+		t.Error("embedded HTML missing cmux automatic sync label")
 	}
 	javascript, err := webAssets.ReadFile("assets/app.js")
 	if err != nil {
 		t.Fatal(err)
 	}
 	script := string(javascript)
-	for _, workflow := range []string{"/analyze", "/analysis", "/rescan", "/launch", "/scan", "/settings"} {
+	for _, workflow := range []string{"/analyze", "/analysis", "/rescan", "/launch", "/scan", "/settings", "/cmux/refresh", "/cmux-title"} {
 		if !strings.Contains(script, workflow) {
 			t.Errorf("embedded JavaScript missing workflow %q", workflow)
 		}
 	}
 	for _, behavior := range []string{
 		"const refreshIntervalSeconds = 60;",
+		`"cmux-filter": "cmux"`,
+		`["cmux-filter", "cmux"]`,
+		`element("span", ` + "`cmux-label ${session.cmux.lifecycle}`" + `, `,
+		`function renderCmuxComparison(session)`,
+		`Different - cmux title preserved`,
 		"function startRefreshCountdown()",
-		"async function refreshPageData()",
+		"async function refreshPageData(showCmuxError)",
 		"await loadSessions(false);",
 		`elements["refresh-countdown"].textContent = `,
-		`elements["refresh-button"].addEventListener("click", refreshPageData);`,
+		`void refreshPageData(false);`,
+		`elements["refresh-button"].addEventListener("click", () => refreshPageData(true));`,
 	} {
 		if !strings.Contains(script, behavior) {
 			t.Errorf("embedded JavaScript missing refresh behavior %q", behavior)
@@ -145,6 +158,8 @@ func TestWebApplicationIncludesCoreWorkflows(t *testing.T) {
 	for _, style := range []string{
 		"#refresh-button { width: 126px;",
 		".refresh-countdown { color: var(--text-muted);",
+		".cmux-label {",
+		".cmux-band {",
 		"font-variant-numeric: tabular-nums;",
 		"@media (max-width: 480px)",
 		".header-actions { justify-content: flex-start; gap: 6px; }",

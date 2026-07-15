@@ -2,17 +2,17 @@
 
 const basePath = location.pathname.endsWith("/") ? location.pathname : location.pathname + "/";
 const apiPath = basePath + "api";
-const state = { sessions: [], nextCursor: "", selectedID: "", searchAbort: null, pollTimer: null };
+const state = { sessions: [], nextCursor: "", selectedID: "", searchAbort: null, pollTimer: null, cmuxStatus: null };
 const refreshIntervalSeconds = 60;
 let refreshSeconds = refreshIntervalSeconds;
 let refreshTimer;
 const elements = Object.fromEntries(Array.from(document.querySelectorAll("[id]")).map((element) => [element.id, element]));
 const filterIDs = [
-  "session-search", "agent-filter", "active-filter", "cwd-filter", "topic-filter", "status-filter", "sort-filter",
+  "session-search", "agent-filter", "active-filter", "cmux-filter", "cwd-filter", "topic-filter", "status-filter", "sort-filter",
   "active-after-filter", "active-before-filter", "started-after-filter", "started-before-filter"
 ];
 const filterParams = {
-  "session-search": "q", "agent-filter": "agent", "active-filter": "active", "cwd-filter": "cwd",
+  "session-search": "q", "agent-filter": "agent", "active-filter": "active", "cmux-filter": "cmux", "cwd-filter": "cwd",
   "topic-filter": "topic_mode", "status-filter": "analysis_status", "sort-filter": "sort",
   "active-after-filter": "active_after", "active-before-filter": "active_before",
   "started-after-filter": "started_after", "started-before-filter": "started_before"
@@ -64,7 +64,7 @@ function activeAfter(value) {
 function searchParams(cursor = "") {
   const params = new URLSearchParams();
   const mappings = [
-    ["session-search", "q"], ["agent-filter", "agent"], ["cwd-filter", "cwd"],
+    ["session-search", "q"], ["agent-filter", "agent"], ["cmux-filter", "cmux"], ["cwd-filter", "cwd"],
     ["topic-filter", "topic_mode"], ["status-filter", "analysis_status"], ["sort-filter", "sort"],
     ["active-after-filter", "active_after"], ["active-before-filter", "active_before"],
     ["started-after-filter", "started_after"], ["started-before-filter", "started_before"]
@@ -86,7 +86,7 @@ function searchParams(cursor = "") {
 function renderFilterChips() {
   elements["filter-chips"].replaceChildren();
   const labels = {
-    q: "Search", agent: "Agent", active: "Active", cwd: "Folder",
+    q: "Search", agent: "Agent", active: "Active", cmux: "cmux", cwd: "Folder",
     topic_mode: "Topics", analysis_status: "Analysis", sort: "Sort", active_after: "Active from",
     active_before: "Active through", started_after: "Started from", started_before: "Started through"
   };
@@ -161,20 +161,28 @@ function startRefreshCountdown() {
   refreshTimer = setInterval(() => {
     refreshSeconds -= 1;
     if (refreshSeconds <= 0) {
-      void refreshPageData();
+      void refreshPageData(false);
       return;
     }
     updateRefreshButton();
   }, 1000);
 }
 
-async function refreshPageData() {
+async function refreshPageData(showCmuxError) {
   clearInterval(refreshTimer);
   elements["refresh-button"].disabled = true;
   elements["refresh-label"].textContent = "Refreshing...";
   elements["refresh-countdown"].textContent = "";
+  let cmuxError;
   try {
+    try {
+      await request("/cmux/refresh", { method: "POST", body: JSON.stringify({}) });
+    } catch (error) {
+      cmuxError = error;
+    }
+    await loadCmuxStatus();
     await loadSessions(false);
+    if (cmuxError && showCmuxError) toast(cmuxError.message, true);
   } finally {
     elements["refresh-button"].disabled = false;
     startRefreshCountdown();
@@ -194,6 +202,7 @@ function renderSessions() {
     row.dataset.sessionId = session.id;
     const top = element("div", "row-top");
     top.append(element("span", "agent-label", session.agent));
+    if (session.cmux?.open) top.append(element("span", `cmux-label ${session.cmux.lifecycle}`, `cmux: ${cmuxLifecycleText(session.cmux.lifecycle)}`));
     if (session.topic_count !== null) top.append(element("span", "topic-label", session.multiple_topics ? `${session.topic_count} topics` : "Focused"));
     if (session.analysis_status !== "current" && session.analysis_status !== "none") top.append(element("span", `status-label ${session.analysis_status}`, statusText(session.analysis_status)));
     row.append(top);
@@ -241,6 +250,7 @@ function renderDetail(session, messages) {
   titleLine.append(titleWrap, actionButtons(session));
   header.append(titleLine, metadata(session));
   content.append(header);
+  content.append(renderCmuxComparison(session));
 
   const summary = element("section", "summary-band");
   summary.append(element("h2", "", "Session overview"), element("p", "", session.summary || "Analyze this session to generate a specific title, overview, and chronological topic chapters."));
@@ -274,6 +284,53 @@ function renderDetail(session, messages) {
   toggle.addEventListener("change", () => renderMessages(messageList, messages, toggle.checked));
   conversation.append(conversationHeading, messageList);
   content.append(conversation);
+}
+
+function renderCmuxComparison(session) {
+  const band = element("section", "cmux-band");
+  const heading = element("div", "cmux-heading");
+  heading.append(element("h2", "", "cmux"));
+  const status = state.cmuxStatus;
+  if (status && !status.available) {
+    heading.append(element("span", "cmux-state unavailable", "Unavailable"));
+    band.append(heading, element("p", "muted", status.error || "cmux is unavailable."));
+    return band;
+  }
+  if (!session.cmux?.open) {
+    heading.append(element("span", "cmux-state", "Not open"));
+    band.append(heading, element("p", "muted", "Not open in cmux"));
+    return band;
+  }
+
+  const titleState = {
+    synced: "Synced",
+    different: "Different - cmux title preserved",
+    no_agent_title: "No Agent History title"
+  }[session.cmux.title_state] || session.cmux.title_state;
+  heading.append(element("span", `cmux-state ${session.cmux.title_state}`, titleState));
+  if (session.cmux.title_state === "different" && session.title) {
+    const push = element("button", "", "Send Agent History title to cmux");
+    push.type = "button";
+    push.addEventListener("click", () => mutateSession(session.id, "/cmux-title", "POST", {}, "Title sent to cmux"));
+    heading.append(push);
+  }
+  band.append(heading);
+  const comparison = element("div", "cmux-comparison");
+  const target = session.cmux.target === "tab" ? "cmux tab title" : "cmux workspace title";
+  comparison.append(cmuxTitleValue(target, session.cmux.target_title || "Untitled"));
+  comparison.append(cmuxTitleValue("Agent History title", session.title || "No generated title"));
+  band.append(comparison);
+  if (session.cmux.target === "workspace" && session.cmux.surface_title && session.cmux.surface_title.trim() !== session.cmux.target_title.trim()) {
+    band.append(element("p", "cmux-secondary", `Mapped tab: ${session.cmux.surface_title}`));
+  }
+  band.append(element("p", "cmux-secondary", `${cmuxLifecycleText(session.cmux.lifecycle)} in cmux`));
+  return band;
+}
+
+function cmuxTitleValue(label, value) {
+  const item = element("div", "cmux-title-value");
+  item.append(element("span", "metadata-label", label), element("span", "", value));
+  return item;
 }
 
 function actionButtons(session) {
@@ -380,12 +437,31 @@ async function loadFacets() {
   } catch (error) { toast(error.message, true); }
 }
 
+function updateCmuxStatus(settings) {
+  state.cmuxStatus = {
+    available: settings.cmux_available,
+    accessMode: settings.cmux_access_mode,
+    error: settings.cmux_error,
+    observedAt: settings.cmux_observed_at
+  };
+}
+
+async function loadCmuxStatus() {
+  const settings = await request("/settings");
+  updateCmuxStatus(settings);
+  return settings;
+}
+
 async function openSettings() {
   try {
-    const settings = await request("/settings");
+    const settings = await loadCmuxStatus();
     elements["settings-provider"].value = settings.analysis_provider;
     elements["settings-model"].value = settings.analysis_model;
     elements["settings-auto"].checked = settings.analysis_auto;
+    elements["settings-cmux-sync"].checked = settings.cmux_title_sync;
+    elements["settings-cmux-status"].textContent = settings.cmux_available
+      ? `cmux connected (${settings.cmux_access_mode})`
+      : (settings.cmux_error || "cmux is unavailable");
     elements["settings-error"].textContent = "";
     elements["settings-dialog"].showModal();
   } catch (error) { toast(error.message, true); }
@@ -393,6 +469,9 @@ async function openSettings() {
 
 function statusText(status) {
   return { partial: "New activity", queued: "Queued", running: "Running", failed: "Failed" }[status] || status;
+}
+function cmuxLifecycleText(lifecycle) {
+  return { running: "Running", idle: "Idle", needsInput: "Needs input", unknown: "Unknown" }[lifecycle] || "Unknown";
 }
 function firstLine(value) { return (value || "").split("\n")[0].slice(0, 100); }
 function formatDate(value) { return value ? new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value)) : "Unknown"; }
@@ -422,7 +501,7 @@ for (const id of filterIDs) {
   elements[id].addEventListener(eventName, applyFilters);
 }
 elements["load-more"].addEventListener("click", () => loadSessions(true));
-elements["refresh-button"].addEventListener("click", refreshPageData);
+elements["refresh-button"].addEventListener("click", () => refreshPageData(true));
 elements["session-results"].addEventListener("keydown", (event) => {
   if (event.key !== "ArrowDown" && event.key !== "ArrowUp" && event.key !== "Enter") return;
   const rows = Array.from(elements["session-results"].children);
@@ -463,18 +542,23 @@ elements["settings-cancel"].addEventListener("click", () => elements["settings-d
 elements["settings-form"].addEventListener("submit", async (event) => {
   event.preventDefault();
   try {
-    await request("/settings", { method: "PUT", body: JSON.stringify({
+    const settings = await request("/settings", { method: "PUT", body: JSON.stringify({
       analysis_provider: elements["settings-provider"].value,
       analysis_model: elements["settings-model"].value,
-      analysis_auto: elements["settings-auto"].checked
+      analysis_auto: elements["settings-auto"].checked,
+      cmux_title_sync: elements["settings-cmux-sync"].checked
     }) });
+    updateCmuxStatus(settings);
     elements["settings-dialog"].close();
-    toast("Analysis settings saved");
+    toast("Settings saved");
   } catch (error) { elements["settings-error"].textContent = error.message; }
 });
 
 restoreFilters();
 renderFilterChips();
 loadFacets();
-loadSessions(false);
+loadCmuxStatus().then(() => loadSessions(false)).catch((error) => {
+  state.cmuxStatus = { available: false, accessMode: "", error: error.message, observedAt: "" };
+  loadSessions(false);
+});
 startRefreshCountdown();

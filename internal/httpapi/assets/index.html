@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Agent History</title>
-  <link rel="stylesheet" href="assets/app.css">
+  <link rel="stylesheet" href="assets/app.css?v=2">
 </head>
 <body>
   <header class="app-header">
@@ -42,6 +42,14 @@
         <option value="3m">Last 3 months</option>
         <option value="6m">Last 6 months</option>
         <option value="1y">Last year</option>
+      </select>
+    </label>
+    <label>
+      <span class="sr-only">cmux status</span>
+      <select id="cmux-filter" name="cmux" aria-label="cmux status">
+        <option value="">All sessions</option>
+        <option value="open">Open in cmux</option>
+        <option value="closed">Not open in cmux</option>
       </select>
     </label>
     <details class="more-filters">
@@ -126,10 +134,12 @@
 
   <dialog id="settings-dialog">
     <form id="settings-form">
-      <h2>Analysis settings</h2>
+      <h2>Settings</h2>
       <label>Provider<input id="settings-provider" type="text" readonly></label>
       <label>Model<input id="settings-model" type="text" required maxlength="200"></label>
       <label class="check-row"><input id="settings-auto" type="checkbox"> Requeue interrupted analysis at startup</label>
+      <label class="check-row"><input id="settings-cmux-sync" type="checkbox"> Automatically sync titles to cmux</label>
+      <p id="settings-cmux-status" class="muted" role="status"></p>
       <p id="settings-error" class="error-text" role="alert"></p>
       <div class="dialog-actions">
         <button id="settings-cancel" type="button">Cancel</button>
@@ -139,6 +149,6 @@
   </dialog>
 
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
-  <script src="assets/app.js"></script>
+  <script src="assets/app.js?v=2"></script>
 </body>
 </html>

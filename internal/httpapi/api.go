@@ -147,11 +147,11 @@ func (h *handler) index(response http.ResponseWriter, _ *http.Request) {
 }
 
 func (h *handler) css(response http.ResponseWriter, _ *http.Request) {
-	h.webAsset(response, "assets/app.css", "text/css; charset=utf-8", "public, max-age=3600")
+	h.webAsset(response, "assets/app.css", "text/css; charset=utf-8", "no-store")
 }
 
 func (h *handler) javascript(response http.ResponseWriter, _ *http.Request) {
-	h.webAsset(response, "assets/app.js", "text/javascript; charset=utf-8", "public, max-age=3600")
+	h.webAsset(response, "assets/app.js", "text/javascript; charset=utf-8", "no-store")
 }
 
 func (h *handler) webAsset(response http.ResponseWriter, name, contentType, cacheControl string) {
