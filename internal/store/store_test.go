@@ -32,8 +32,8 @@ func TestOpenMigratesEmptyDatabaseAndIsIdempotent(t *testing.T) {
 	if err := second.db.QueryRow(`SELECT count(*) FROM schema_migrations`).Scan(&migrations); err != nil {
 		t.Fatalf("query migrations: %v", err)
 	}
-	if migrations != 1 {
-		t.Fatalf("migration count = %d, want 1", migrations)
+	if migrations != 2 {
+		t.Fatalf("migration count = %d, want 2", migrations)
 	}
 
 	var connections []*sql.Conn
@@ -395,6 +395,87 @@ func TestSettingsRejectSecrets(t *testing.T) {
 		if err := store.SetSetting(context.Background(), key, "sensitive"); err == nil {
 			t.Errorf("SetSetting(%q) succeeded, want rejection", key)
 		}
+	}
+}
+
+func TestReplaceCmuxSnapshotTracksOpenStateAndPushProvenance(t *testing.T) {
+	database := openTestStore(t)
+	ctx := context.Background()
+	for _, id := range []string{"cmux-open", "cmux-stale"} {
+		if err := database.UpsertSession(ctx, testSession(id)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	observedAt := time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC)
+	states := []CmuxSessionState{
+		{
+			SessionID: "cmux-open", Open: true, WorkspaceID: "workspace-1", SurfaceID: "surface-1",
+			WorkspaceTitle: "cmux title", SurfaceTitle: "cmux tab", WorkspaceHasCustomTitle: false,
+			Lifecycle: "running", ObservedAt: observedAt,
+		},
+		{
+			SessionID: "cmux-stale", Open: true, WorkspaceID: "workspace-2", SurfaceID: "surface-2",
+			WorkspaceTitle: "stale title", SurfaceTitle: "stale tab", Lifecycle: "idle", ObservedAt: observedAt,
+		},
+	}
+	status := CmuxStatus{Available: true, AccessMode: "allowAll", ObservedAt: observedAt}
+	if err := database.ReplaceCmuxSnapshot(ctx, status, states); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.RecordCmuxPush(ctx, "cmux-open", "pushed workspace", "pushed tab", observedAt.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+
+	state, ok, err := database.CmuxState(ctx, "cmux-open")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || !state.Open || state.Lifecycle != "running" || state.WorkspaceTitle != "cmux title" {
+		t.Fatalf("cmux state = %#v, %v", state, ok)
+	}
+	if state.LastPushedWorkspaceTitle != "pushed workspace" || state.LastPushedSurfaceTitle != "pushed tab" {
+		t.Fatalf("push provenance = %#v", state)
+	}
+
+	later := observedAt.Add(2 * time.Minute)
+	if err := database.ReplaceCmuxSnapshot(ctx, CmuxStatus{Available: true, AccessMode: "allowAll", ObservedAt: later}, nil); err != nil {
+		t.Fatal(err)
+	}
+	state, ok, err = database.CmuxState(ctx, "cmux-open")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || state.Open || state.LastPushedWorkspaceTitle != "pushed workspace" || state.LastPushedSurfaceTitle != "pushed tab" {
+		t.Fatalf("closed cmux state = %#v, %v", state, ok)
+	}
+	currentStatus, err := database.CmuxStatus(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !currentStatus.Available || currentStatus.AccessMode != "allowAll" || !currentStatus.ObservedAt.Equal(later) {
+		t.Fatalf("cmux status = %#v", currentStatus)
+	}
+}
+
+func TestSessionsByNativeIdentity(t *testing.T) {
+	database := openTestStore(t)
+	ctx := context.Background()
+	claude := testSession("claude-session")
+	claude.Agent = "claude"
+	claude.NativeSessionID = "claude-native"
+	codex := testSession("codex-session")
+	codex.NativeSessionID = "codex-native"
+	for _, session := range []Session{claude, codex} {
+		if err := database.UpsertSession(ctx, session); err != nil {
+			t.Fatal(err)
+		}
+	}
+	identities, err := database.SessionsByNativeIdentity(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := fmt.Sprint(identities), "[{claude claude-native claude-session} {codex codex-native codex-session}]"; got != want {
+		t.Fatalf("identities = %s, want %s", got, want)
 	}
 }
 

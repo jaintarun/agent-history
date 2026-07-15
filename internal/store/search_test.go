@@ -145,10 +145,40 @@ func TestSearchRejectsInvalidOptions(t *testing.T) {
 	database := searchFixture(t)
 	for _, query := range []SearchQuery{
 		{Agent: "other"}, {TopicMode: "unknown"}, {AnalysisStatus: "bad"},
-		{Sort: "random"}, {Limit: 501}, {Cursor: "not-a-cursor"},
+		{Cmux: "unknown"}, {Sort: "random"}, {Limit: 501}, {Cursor: "not-a-cursor"},
 	} {
 		if _, err := database.SearchSessions(context.Background(), query); err == nil {
 			t.Errorf("SearchSessions(%#v) succeeded, want validation error", query)
+		}
+	}
+}
+
+func TestSearchSessionsFiltersCmuxOpenAndClosed(t *testing.T) {
+	database := searchFixture(t)
+	ctx := context.Background()
+	observedAt := time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC)
+	if err := database.ReplaceCmuxSnapshot(ctx, CmuxStatus{Available: true, AccessMode: "allowAll", ObservedAt: observedAt}, []CmuxSessionState{
+		{SessionID: "s1", Open: true, WorkspaceID: "w1", SurfaceID: "p1", WorkspaceTitle: "one", SurfaceTitle: "one", Lifecycle: "running", ObservedAt: observedAt},
+		{SessionID: "s2", Open: true, WorkspaceID: "w2", SurfaceID: "p2", WorkspaceTitle: "two", SurfaceTitle: "two", Lifecycle: "idle", ObservedAt: observedAt},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		query SearchQuery
+		want  []string
+	}{
+		{query: SearchQuery{Cmux: "open"}, want: []string{"s1", "s2"}},
+		{query: SearchQuery{Cmux: "closed"}, want: []string{"s3", "s4"}},
+		{query: SearchQuery{Cmux: "open", Agent: "claude"}, want: []string{"s2"}},
+	}
+	for _, test := range tests {
+		result, err := database.SearchSessions(ctx, test.query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := hitIDs(result.Hits); fmt.Sprint(got) != fmt.Sprint(test.want) {
+			t.Fatalf("SearchSessions(%#v) = %v, want %v", test.query, got, test.want)
 		}
 	}
 }

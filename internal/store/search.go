@@ -24,6 +24,7 @@ type SearchQuery struct {
 	CWD            string
 	TopicMode      string
 	AnalysisStatus string
+	Cmux           string
 	Sort           string
 	Cursor         string
 	Limit          int
@@ -233,6 +234,20 @@ func (s *Store) filteredSessions(ctx context.Context, query SearchQuery) ([]Sess
 		filters = append(filters, "analysis_status = ?")
 		args = append(args, query.AnalysisStatus)
 	}
+	switch query.Cmux {
+	case "open":
+		filters = append(filters, `EXISTS (
+            SELECT 1 FROM cmux_session_state
+            WHERE cmux_session_state.session_id = sessions.id
+              AND cmux_session_state.open = 1
+        )`)
+	case "closed":
+		filters = append(filters, `NOT EXISTS (
+            SELECT 1 FROM cmux_session_state
+            WHERE cmux_session_state.session_id = sessions.id
+              AND cmux_session_state.open = 1
+        )`)
+	}
 	if len(filters) != 0 {
 		statement += " WHERE " + strings.Join(filters, " AND ")
 	}
@@ -354,6 +369,9 @@ func validateSearchQuery(query SearchQuery) error {
 	validStatus := map[string]bool{"": true, "none": true, "queued": true, "running": true, "current": true, "partial": true, "failed": true}
 	if !validStatus[query.AnalysisStatus] {
 		return fmt.Errorf("invalid analysis status %q", query.AnalysisStatus)
+	}
+	if query.Cmux != "" && query.Cmux != "open" && query.Cmux != "closed" {
+		return fmt.Errorf("invalid cmux state %q", query.Cmux)
 	}
 	if query.Sort != "" && query.Sort != "last_active" && query.Sort != "started" && query.Sort != "title" {
 		return fmt.Errorf("invalid sort %q", query.Sort)
