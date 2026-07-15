@@ -133,6 +133,17 @@ func (s *Store) CmuxState(ctx context.Context, sessionID string) (CmuxSessionSta
 	return state, true, nil
 }
 
+// OpenCmuxSessionsInWorkspace returns how many matched open sessions share a workspace.
+func (s *Store) OpenCmuxSessionsInWorkspace(ctx context.Context, workspaceID string) (int, error) {
+	var count int
+	if err := s.db.QueryRowContext(ctx, `
+        SELECT count(*) FROM cmux_session_state
+        WHERE open = 1 AND workspace_id = ?`, workspaceID).Scan(&count); err != nil {
+		return 0, fmt.Errorf("count open cmux sessions in workspace: %w", err)
+	}
+	return count, nil
+}
+
 // CmuxStatus returns the last API availability observation.
 func (s *Store) CmuxStatus(ctx context.Context) (CmuxStatus, error) {
 	var status CmuxStatus

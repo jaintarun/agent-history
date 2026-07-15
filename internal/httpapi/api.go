@@ -47,6 +47,13 @@ type Launcher interface {
 	Launch(context.Context, string, string) (LaunchResult, error)
 }
 
+// Cmux controls live cmux reconciliation and explicit title writes.
+type Cmux interface {
+	Refresh(context.Context) error
+	PushTitle(context.Context, string) error
+	Status() store.CmuxStatus
+}
+
 // LaunchResult is safe structured launch/copy output.
 type LaunchResult = launch.Result
 
@@ -58,6 +65,7 @@ type Config struct {
 	Scanner          Scanner
 	Queue            AnalysisQueue
 	Launcher         Launcher
+	Cmux             Cmux
 	Logger           *slog.Logger
 	AnalysisDefaults analyze.Options
 }
@@ -69,6 +77,7 @@ type handler struct {
 	scanner          Scanner
 	queue            AnalysisQueue
 	launcher         Launcher
+	cmux             Cmux
 	logger           *slog.Logger
 	analysisDefaults analyze.Options
 	mux              *http.ServeMux
@@ -103,7 +112,7 @@ func NewHandler(config Config) (http.Handler, error) {
 	}
 	h := &handler{
 		token: config.Token, prefix: prefix, store: config.Store,
-		scanner: config.Scanner, queue: config.Queue, launcher: config.Launcher,
+		scanner: config.Scanner, queue: config.Queue, launcher: config.Launcher, cmux: config.Cmux,
 		logger: config.Logger, analysisDefaults: config.AnalysisDefaults,
 		mux: http.NewServeMux(),
 	}
@@ -126,7 +135,9 @@ func (h *handler) routes() {
 	h.mux.HandleFunc("POST /api/retitle-weak", h.retitleWeak)
 	h.mux.HandleFunc("POST /api/sessions/{id}/rescan", h.rescan)
 	h.mux.HandleFunc("POST /api/sessions/{id}/launch", h.launch)
+	h.mux.HandleFunc("POST /api/sessions/{id}/cmux-title", h.pushCmuxTitle)
 	h.mux.HandleFunc("POST /api/scan", h.scan)
+	h.mux.HandleFunc("POST /api/cmux/refresh", h.refreshCmux)
 	h.mux.HandleFunc("GET /api/settings", h.getSettings)
 	h.mux.HandleFunc("PUT /api/settings", h.putSettings)
 }
@@ -208,7 +219,11 @@ func (h *handler) searchSessions(response http.ResponseWriter, request *http.Req
 	}
 	sessions := make([]sessionResponse, 0, len(result.Hits))
 	for _, hit := range result.Hits {
-		item := sessionDTO(hit.Session)
+		item, err := h.sessionDTO(request.Context(), hit.Session)
+		if err != nil {
+			writeError(response, http.StatusInternalServerError, "store_error", "could not load cmux session state")
+			return
+		}
 		item.Snippet = hit.Snippet
 		sessions = append(sessions, item)
 	}
@@ -234,7 +249,11 @@ func (h *handler) sessionDetail(response http.ResponseWriter, request *http.Requ
 		h.storeError(response, err)
 		return
 	}
-	result := sessionDTO(detail.Session)
+	result, err := h.sessionDTO(request.Context(), detail.Session)
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "store_error", "could not load cmux session state")
+		return
+	}
 	for _, segment := range detail.Segments {
 		result.Topics = append(result.Topics, topicResponse{
 			Position: segment.Position, StartSequence: segment.StartSequence,
@@ -481,10 +500,59 @@ func (h *handler) launch(response http.ResponseWriter, request *http.Request) {
 	writeJSON(response, http.StatusOK, result)
 }
 
+func (h *handler) refreshCmux(response http.ResponseWriter, request *http.Request) {
+	if h.cmux == nil {
+		writeError(response, http.StatusNotImplemented, "cmux_unavailable", "cmux integration is not configured")
+		return
+	}
+	var body struct{}
+	if err := decodeJSONBody(response, request, &body); err != nil {
+		writeError(response, http.StatusBadRequest, "invalid_json", err.Error())
+		return
+	}
+	if err := h.cmux.Refresh(request.Context()); err != nil {
+		writeError(response, http.StatusServiceUnavailable, "cmux_unavailable", "cmux is unavailable")
+		return
+	}
+	writeJSON(response, http.StatusOK, map[string]string{"status": "refreshed"})
+}
+
+func (h *handler) pushCmuxTitle(response http.ResponseWriter, request *http.Request) {
+	if h.cmux == nil {
+		writeError(response, http.StatusNotImplemented, "cmux_unavailable", "cmux integration is not configured")
+		return
+	}
+	var body struct{}
+	if err := decodeJSONBody(response, request, &body); err != nil {
+		writeError(response, http.StatusBadRequest, "invalid_json", err.Error())
+		return
+	}
+	sessionID := request.PathValue("id")
+	if _, err := h.store.GetSession(request.Context(), sessionID); err != nil {
+		h.storeError(response, err)
+		return
+	}
+	if err := h.cmux.PushTitle(request.Context(), sessionID); err != nil {
+		message := err.Error()
+		if message == "session is not open in cmux" || message == "session has no Agent History title" {
+			writeError(response, http.StatusConflict, "cmux_conflict", message)
+		} else {
+			writeError(response, http.StatusServiceUnavailable, "cmux_unavailable", "cmux title could not be updated")
+		}
+		return
+	}
+	writeJSON(response, http.StatusOK, map[string]string{"status": "synced"})
+}
+
 type settingsResponse struct {
 	AnalysisProvider string `json:"analysis_provider"`
 	AnalysisModel    string `json:"analysis_model"`
 	AnalysisAuto     bool   `json:"analysis_auto"`
+	CmuxTitleSync    bool   `json:"cmux_title_sync"`
+	CmuxAvailable    bool   `json:"cmux_available"`
+	CmuxAccessMode   string `json:"cmux_access_mode"`
+	CmuxError        string `json:"cmux_error"`
+	CmuxObservedAt   string `json:"cmux_observed_at,omitempty"`
 }
 
 func (h *handler) getSettings(response http.ResponseWriter, request *http.Request) {
@@ -506,6 +574,7 @@ func (h *handler) putSettings(response http.ResponseWriter, request *http.Reques
 		AnalysisProvider string `json:"analysis_provider"`
 		AnalysisModel    string `json:"analysis_model"`
 		AnalysisAuto     *bool  `json:"analysis_auto"`
+		CmuxTitleSync    *bool  `json:"cmux_title_sync"`
 	}
 	if err := decodeJSONBody(response, request, &body); err != nil {
 		writeError(response, http.StatusBadRequest, "invalid_json", err.Error())
@@ -520,6 +589,9 @@ func (h *handler) putSettings(response http.ResponseWriter, request *http.Reques
 	if body.AnalysisAuto != nil {
 		current.AnalysisAuto = *body.AnalysisAuto
 	}
+	if body.CmuxTitleSync != nil {
+		current.CmuxTitleSync = *body.CmuxTitleSync
+	}
 	if current.AnalysisProvider != h.analysisDefaults.Provider || strings.TrimSpace(current.AnalysisModel) == "" || len(current.AnalysisModel) > 200 {
 		writeError(response, http.StatusBadRequest, "invalid_settings", "provider or model is not configured")
 		return
@@ -528,6 +600,7 @@ func (h *handler) putSettings(response http.ResponseWriter, request *http.Reques
 		"analysis.provider": current.AnalysisProvider,
 		"analysis.model":    current.AnalysisModel,
 		"analysis.auto":     strconv.FormatBool(current.AnalysisAuto),
+		"cmux.title_sync":   strconv.FormatBool(current.CmuxTitleSync),
 	}); err != nil {
 		writeError(response, http.StatusInternalServerError, "settings_error", "could not save settings")
 		return
@@ -559,6 +632,28 @@ func (h *handler) settings(ctx context.Context) (settingsResponse, error) {
 			return settingsResponse{}, err
 		}
 		result.AnalysisAuto = parsed
+	}
+	if value, ok, err := h.store.Setting(ctx, "cmux.title_sync"); err != nil {
+		return settingsResponse{}, err
+	} else if ok {
+		parsed, err := strconv.ParseBool(value)
+		if err != nil {
+			return settingsResponse{}, err
+		}
+		result.CmuxTitleSync = parsed
+	}
+	status, err := h.store.CmuxStatus(ctx)
+	if err != nil {
+		return settingsResponse{}, err
+	}
+	if h.cmux != nil {
+		status = h.cmux.Status()
+	}
+	result.CmuxAvailable = status.Available
+	result.CmuxAccessMode = status.AccessMode
+	result.CmuxError = status.Error
+	if !status.ObservedAt.IsZero() {
+		result.CmuxObservedAt = formatAPITime(status.ObservedAt)
 	}
 	return result, nil
 }
@@ -594,6 +689,18 @@ type sessionResponse struct {
 	AnalyzedThroughAt       *string         `json:"analyzed_through_at,omitempty"`
 	Snippet                 string          `json:"snippet,omitempty"`
 	Topics                  []topicResponse `json:"topics,omitempty"`
+	Cmux                    *cmuxResponse   `json:"cmux,omitempty"`
+}
+
+type cmuxResponse struct {
+	Open           bool   `json:"open"`
+	Lifecycle      string `json:"lifecycle"`
+	WorkspaceTitle string `json:"workspace_title"`
+	SurfaceTitle   string `json:"surface_title"`
+	Target         string `json:"target,omitempty"`
+	TargetTitle    string `json:"target_title,omitempty"`
+	TitleState     string `json:"title_state"`
+	ObservedAt     string `json:"observed_at"`
 }
 
 type topicResponse struct {
@@ -641,11 +748,47 @@ func sessionDTO(session store.Session) sessionResponse {
 	return result
 }
 
+func (h *handler) sessionDTO(ctx context.Context, session store.Session) (sessionResponse, error) {
+	result := sessionDTO(session)
+	state, ok, err := h.store.CmuxState(ctx, session.ID)
+	if err != nil || !ok {
+		return result, err
+	}
+	cmux := &cmuxResponse{
+		Open: state.Open, Lifecycle: state.Lifecycle,
+		WorkspaceTitle: state.WorkspaceTitle, SurfaceTitle: state.SurfaceTitle,
+		TitleState: "not_open", ObservedAt: formatAPITime(state.ObservedAt),
+	}
+	if state.Open {
+		count, err := h.store.OpenCmuxSessionsInWorkspace(ctx, state.WorkspaceID)
+		if err != nil {
+			return result, err
+		}
+		cmux.Target = "workspace"
+		cmux.TargetTitle = state.WorkspaceTitle
+		if count > 1 {
+			cmux.Target = "tab"
+			cmux.TargetTitle = state.SurfaceTitle
+		}
+		title := strings.TrimSpace(session.Title)
+		switch {
+		case title == "":
+			cmux.TitleState = "no_agent_title"
+		case title == strings.TrimSpace(cmux.TargetTitle):
+			cmux.TitleState = "synced"
+		default:
+			cmux.TitleState = "different"
+		}
+	}
+	result.Cmux = cmux
+	return result, nil
+}
+
 func parseSearchQuery(values url.Values) (store.SearchQuery, error) {
 	query := store.SearchQuery{
 		Text: values.Get("q"), Agent: values.Get("agent"), CWD: values.Get("cwd"),
 		TopicMode: values.Get("topic_mode"), AnalysisStatus: values.Get("analysis_status"),
-		Sort: values.Get("sort"), Cursor: values.Get("cursor"),
+		Cmux: values.Get("cmux"), Sort: values.Get("sort"), Cursor: values.Get("cursor"),
 	}
 	for key, destination := range map[string]**time.Time{
 		"active_after": &query.ActiveAfter, "active_before": &query.ActiveBefore,

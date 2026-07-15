@@ -201,6 +201,129 @@ func TestSessionReadEndpoints(t *testing.T) {
 	}
 }
 
+func TestCmuxSessionStateAndFiltering(t *testing.T) {
+	application, database, _, _, _, _ := testHandler(t)
+	observedAt := time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC)
+	if err := database.ReplaceCmuxSnapshot(context.Background(), store.CmuxStatus{
+		Available: true, AccessMode: "allowAll", ObservedAt: observedAt,
+	}, []store.CmuxSessionState{{
+		SessionID: "session-1", Open: true, WorkspaceID: "workspace-1", SurfaceID: "surface-1",
+		WorkspaceTitle: "Old cmux title", SurfaceTitle: "Codex", Lifecycle: "running", ObservedAt: observedAt,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	integration := &fakeCmux{status: store.CmuxStatus{Available: true, AccessMode: "allowAll", ObservedAt: observedAt}}
+	application.(*handler).cmux = integration
+
+	response := serve(application, apiRequest(http.MethodGet, "/test-token/api/sessions?cmux=open", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("open filter status = %d body=%s", response.Code, response.Body.String())
+	}
+	var result struct {
+		Sessions []struct {
+			ID   string `json:"id"`
+			Cmux *struct {
+				Open           bool   `json:"open"`
+				Lifecycle      string `json:"lifecycle"`
+				WorkspaceTitle string `json:"workspace_title"`
+				SurfaceTitle   string `json:"surface_title"`
+				Target         string `json:"target"`
+				TargetTitle    string `json:"target_title"`
+				TitleState     string `json:"title_state"`
+				ObservedAt     string `json:"observed_at"`
+			} `json:"cmux"`
+		} `json:"sessions"`
+	}
+	decodeResponse(t, response, &result)
+	if len(result.Sessions) != 1 || result.Sessions[0].ID != "session-1" || result.Sessions[0].Cmux == nil {
+		t.Fatalf("open filter response = %#v", result)
+	}
+	cmux := result.Sessions[0].Cmux
+	if !cmux.Open || cmux.Lifecycle != "running" || cmux.WorkspaceTitle != "Old cmux title" ||
+		cmux.SurfaceTitle != "Codex" || cmux.Target != "workspace" || cmux.TargetTitle != "Old cmux title" ||
+		cmux.TitleState != "different" || cmux.ObservedAt != observedAt.Format(time.RFC3339Nano) {
+		t.Fatalf("cmux response = %#v", cmux)
+	}
+
+	response = serve(application, apiRequest(http.MethodGet, "/test-token/api/sessions?cmux=closed", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("closed filter status = %d body=%s", response.Code, response.Body.String())
+	}
+	decodeResponse(t, response, &result)
+	if len(result.Sessions) != 0 {
+		t.Fatalf("closed filter response = %#v", result)
+	}
+	response = serve(application, apiRequest(http.MethodGet, "/test-token/api/sessions?cmux=invalid", nil))
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("invalid cmux filter status = %d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestCmuxRefreshAndManualTitlePush(t *testing.T) {
+	application, _, _, _, _, _ := testHandler(t)
+	integration := &fakeCmux{status: store.CmuxStatus{Available: true, AccessMode: "allowAll"}}
+	application.(*handler).cmux = integration
+
+	response := serve(application, jsonRequest(http.MethodPost, "/test-token/api/cmux/refresh", `{}`))
+	if response.Code != http.StatusOK || integration.refreshCalls != 1 {
+		t.Fatalf("refresh response=%d calls=%d body=%s", response.Code, integration.refreshCalls, response.Body.String())
+	}
+	response = serve(application, jsonRequest(http.MethodPost, "/test-token/api/sessions/session-1/cmux-title", `{}`))
+	if response.Code != http.StatusOK || len(integration.pushIDs) != 1 || integration.pushIDs[0] != "session-1" {
+		t.Fatalf("push response=%d ids=%v body=%s", response.Code, integration.pushIDs, response.Body.String())
+	}
+	response = serve(application, jsonRequest(http.MethodPost, "/test-token/api/sessions/missing/cmux-title", `{}`))
+	if response.Code != http.StatusNotFound || len(integration.pushIDs) != 1 {
+		t.Fatalf("missing push response=%d ids=%v body=%s", response.Code, integration.pushIDs, response.Body.String())
+	}
+
+	integration.err = errors.New("dial unix /private/cmux.sock: connection refused")
+	response = serve(application, jsonRequest(http.MethodPost, "/test-token/api/cmux/refresh", `{}`))
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("unavailable refresh status = %d body=%s", response.Code, response.Body.String())
+	}
+	if strings.Contains(response.Body.String(), "/private/cmux.sock") {
+		t.Fatalf("unavailable response leaked socket path: %s", response.Body.String())
+	}
+}
+
+func TestCmuxSettingsPersistAutomaticSyncAndExposeStatus(t *testing.T) {
+	application, database, _, _, _, _ := testHandler(t)
+	observedAt := time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC)
+	integration := &fakeCmux{status: store.CmuxStatus{
+		Available: true, AccessMode: "allowAll", ObservedAt: observedAt,
+	}}
+	application.(*handler).cmux = integration
+
+	response := serve(application, apiRequest(http.MethodGet, "/test-token/api/settings", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("get settings status = %d body=%s", response.Code, response.Body.String())
+	}
+	var settings struct {
+		CmuxTitleSync    bool   `json:"cmux_title_sync"`
+		CmuxAvailable    bool   `json:"cmux_available"`
+		CmuxAccessMode   string `json:"cmux_access_mode"`
+		CmuxError        string `json:"cmux_error"`
+		CmuxObservedAt   string `json:"cmux_observed_at"`
+		AnalysisProvider string `json:"analysis_provider"`
+	}
+	decodeResponse(t, response, &settings)
+	if settings.CmuxTitleSync || !settings.CmuxAvailable || settings.CmuxAccessMode != "allowAll" ||
+		settings.CmuxError != "" || settings.CmuxObservedAt != observedAt.Format(time.RFC3339Nano) ||
+		settings.AnalysisProvider != "codex-cli" {
+		t.Fatalf("cmux settings = %#v", settings)
+	}
+
+	response = serve(application, jsonRequest(http.MethodPut, "/test-token/api/settings", `{"cmux_title_sync":true}`))
+	if response.Code != http.StatusOK {
+		t.Fatalf("put cmux settings status = %d body=%s", response.Code, response.Body.String())
+	}
+	value, ok, err := database.Setting(context.Background(), "cmux.title_sync")
+	if err != nil || !ok || value != "true" {
+		t.Fatalf("stored cmux title sync = %q, %v, %v", value, ok, err)
+	}
+}
+
 func TestMutationEndpoints(t *testing.T) {
 	handler, database, scanner, queue, launcher, _ := testHandler(t)
 
@@ -397,6 +520,27 @@ func (q *fakeQueue) enqueue(sessionID string, options analyze.Options, kind stri
 type fakeLauncher struct {
 	sessionID string
 	mode      string
+}
+
+type fakeCmux struct {
+	status       store.CmuxStatus
+	refreshCalls int
+	pushIDs      []string
+	err          error
+}
+
+func (c *fakeCmux) Refresh(context.Context) error {
+	c.refreshCalls++
+	return c.err
+}
+
+func (c *fakeCmux) PushTitle(_ context.Context, sessionID string) error {
+	c.pushIDs = append(c.pushIDs, sessionID)
+	return c.err
+}
+
+func (c *fakeCmux) Status() store.CmuxStatus {
+	return c.status
 }
 
 func (l *fakeLauncher) Launch(_ context.Context, sessionID, mode string) (LaunchResult, error) {
