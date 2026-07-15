@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/tarunjain/agent-history/internal/analyze"
+	cmuxintegration "github.com/tarunjain/agent-history/internal/cmux"
 	"github.com/tarunjain/agent-history/internal/config"
 	"github.com/tarunjain/agent-history/internal/evaluation"
 	"github.com/tarunjain/agent-history/internal/httpapi"
@@ -153,6 +154,11 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 	})
 	worker := analyze.NewWorker(database, engine, 256)
 	logger := slog.New(slog.NewTextHandler(stderr, nil))
+	home, homeErr := os.UserHomeDir()
+	if homeErr != nil {
+		logger.Warn("could not resolve home directory for cmux hooks", "error", homeErr)
+	}
+	cmuxReconciler := cmuxintegration.NewReconciler(cmuxintegration.NewClient(""), database, home, logger)
 	server, err := httpapi.Start(ctx, *bind, httpapi.Config{
 		Store: database, Scanner: scanner, Queue: worker, Launcher: launcher, Logger: logger,
 		AnalysisDefaults: options, PlainURL: *noURLToken,
@@ -195,6 +201,8 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 		}
 	}
 	scanDone := startScanLoop(scanContext, scanner, *scanOnStart, *scanInterval, logger, afterScan)
+	cmuxContext, stopCmux := context.WithCancel(ctx)
+	cmuxDone := cmuxReconciler.Start(cmuxContext, time.Minute)
 	if *openBrowserFlag && !*noOpen {
 		if err := openBrowser(server.URL()); err != nil {
 			logger.Warn("could not open browser", "error", err)
@@ -202,7 +210,9 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 	}
 	serveErr := <-server.Done()
 	stopScans()
+	stopCmux()
 	<-scanDone
+	<-cmuxDone
 	worker.Close()
 	closeErr := database.Close()
 	if serveErr != nil {
@@ -221,6 +231,7 @@ func seedAnalysisSettings(ctx context.Context, database *store.Store, options an
 		"analysis.provider": options.Provider,
 		"analysis.model":    options.Model,
 		"analysis.auto":     strconv.FormatBool(auto),
+		"cmux.title_sync":   "false",
 	}
 	missing := make(map[string]string)
 	for key, value := range defaults {

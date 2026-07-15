@@ -102,6 +102,7 @@ func TestScanCodexImportsFixture(t *testing.T) {
 
 func TestServePrintsURLAndStopsCleanly(t *testing.T) {
 	databasePath := filepath.Join(t.TempDir(), "history.db")
+	t.Setenv("CMUX_SOCKET_PATH", filepath.Join(t.TempDir(), "missing-cmux.sock"))
 	configPath := filepath.Join(t.TempDir(), "config.toml")
 	if err := os.WriteFile(configPath, []byte("[analysis]\nprovider = \"codex-cli\"\nmodel = \"configured-model\"\nauto = false\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -142,6 +143,10 @@ func TestServePrintsURLAndStopsCleanly(t *testing.T) {
 	model, ok, err := database.Setting(context.Background(), "analysis.model")
 	if err != nil || !ok || model != "configured-model" {
 		t.Fatalf("seeded model = %q, %v, %v", model, ok, err)
+	}
+	cmuxSync, ok, err := database.Setting(context.Background(), "cmux.title_sync")
+	if err != nil || !ok || cmuxSync != "false" {
+		t.Fatalf("seeded cmux title sync = %q, %v, %v", cmuxSync, ok, err)
 	}
 	if err := database.Close(); err != nil {
 		t.Fatal(err)
