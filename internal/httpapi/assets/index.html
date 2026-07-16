@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Agent History</title>
-  <link rel="stylesheet" href="assets/app.css?v=2">
+  <link rel="stylesheet" href="assets/app.css?v=3">
 </head>
 <body>
   <header class="app-header">
@@ -13,6 +13,10 @@
       <span id="result-count" class="muted" aria-live="polite"></span>
     </div>
     <div class="header-actions">
+      <label class="auto-refresh-control">
+        <input id="auto-refresh-toggle" type="checkbox" checked>
+        <span>Auto refresh</span>
+      </label>
       <button id="refresh-button" type="button"><span id="refresh-label">Refresh</span><span id="refresh-countdown" class="refresh-countdown">in 60s</span></button>
       <button id="retitle-weak-button" type="button">Retitle weak titles</button>
       <button id="scan-button" type="button">Scan</button>
@@ -149,6 +153,6 @@
   </dialog>
 
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
-  <script src="assets/app.js?v=2"></script>
+  <script src="assets/app.js?v=3"></script>
 </body>
 </html>

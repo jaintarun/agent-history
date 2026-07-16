@@ -75,9 +75,9 @@ func TestEmbeddedWebApplication(t *testing.T) {
 		contains    string
 		cache       string
 	}{
-		{path: "/test-token/", contentType: "text/html", contains: `assets/app.js?v=2`, cache: "no-store"},
-		{path: "/test-token/assets/app.css?v=2", contentType: "text/css", contains: ":root", cache: "no-store"},
-		{path: "/test-token/assets/app.js?v=2", contentType: "text/javascript", contains: "fetch(", cache: "no-store"},
+		{path: "/test-token/", contentType: "text/html", contains: `assets/app.js?v=3`, cache: "no-store"},
+		{path: "/test-token/assets/app.css?v=3", contentType: "text/css", contains: ":root", cache: "no-store"},
+		{path: "/test-token/assets/app.js?v=3", contentType: "text/javascript", contains: "fetch(", cache: "no-store"},
 	}
 	for _, test := range tests {
 		response := serve(handler, apiRequest(http.MethodGet, test.path, nil))
@@ -113,7 +113,7 @@ func TestWebApplicationIncludesCoreWorkflows(t *testing.T) {
 		"status-filter", "sort-filter", "active-after-filter", "active-before-filter",
 		"started-after-filter", "started-before-filter", "session-results", "detail-content",
 		"confirm-dialog", "command-dialog", "settings-dialog", "retitle-weak-button", "refresh-button",
-		"refresh-label", "refresh-countdown", "settings-cmux-sync", "settings-cmux-status",
+		"refresh-label", "refresh-countdown", "auto-refresh-toggle", "settings-cmux-sync", "settings-cmux-status",
 	} {
 		if !strings.Contains(markup, `id="`+id+`"`) {
 			t.Errorf("embedded HTML missing control %q", id)
@@ -150,6 +150,20 @@ func TestWebApplicationIncludesCoreWorkflows(t *testing.T) {
 			t.Errorf("embedded JavaScript missing refresh behavior %q", behavior)
 		}
 	}
+	for _, behavior := range []string{
+		`const autoRefreshStorageKey = "agent-history.auto-refresh";`,
+		`function loadAutoRefreshPreference()`,
+		`function saveAutoRefreshPreference(enabled)`,
+		`function stopScheduledRefreshes()`,
+		`function scheduleSelectedSessionPoll()`,
+		`if (!state.autoRefresh)`,
+		`state.selectedAnalysisStatus = session.analysis_status;`,
+		`elements["auto-refresh-toggle"].addEventListener("change"`,
+	} {
+		if !strings.Contains(script, behavior) {
+			t.Errorf("embedded JavaScript missing auto-refresh behavior %q", behavior)
+		}
+	}
 	css, err := webAssets.ReadFile("assets/app.css")
 	if err != nil {
 		t.Fatal(err)
@@ -158,6 +172,9 @@ func TestWebApplicationIncludesCoreWorkflows(t *testing.T) {
 	for _, style := range []string{
 		"#refresh-button { width: 126px;",
 		".refresh-countdown { color: var(--text-muted);",
+		".auto-refresh-control {",
+		"width: 104px;",
+		"white-space: nowrap;",
 		".cmux-label {",
 		".cmux-band {",
 		"font-variant-numeric: tabular-nums;",

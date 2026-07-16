@@ -2,7 +2,23 @@
 
 const basePath = location.pathname.endsWith("/") ? location.pathname : location.pathname + "/";
 const apiPath = basePath + "api";
-const state = { sessions: [], nextCursor: "", selectedID: "", searchAbort: null, pollTimer: null, cmuxStatus: null };
+const autoRefreshStorageKey = "agent-history.auto-refresh";
+
+function loadAutoRefreshPreference() {
+  try { return localStorage.getItem(autoRefreshStorageKey) !== "off"; }
+  catch { return true; }
+}
+
+function saveAutoRefreshPreference(enabled) {
+  try { localStorage.setItem(autoRefreshStorageKey, enabled ? "on" : "off"); }
+  catch { /* Browser storage is optional. */ }
+}
+
+const state = {
+  sessions: [], nextCursor: "", selectedID: "", searchAbort: null,
+  pollTimer: null, cmuxStatus: null,
+  autoRefresh: loadAutoRefreshPreference(), selectedAnalysisStatus: ""
+};
 const refreshIntervalSeconds = 60;
 let refreshSeconds = refreshIntervalSeconds;
 let refreshTimer;
@@ -154,8 +170,34 @@ function updateRefreshButton() {
   elements["refresh-countdown"].textContent = `in ${refreshSeconds}s`;
 }
 
+function stopScheduledRefreshes() {
+  clearInterval(refreshTimer);
+  clearTimeout(state.pollTimer);
+  state.pollTimer = null;
+  elements["refresh-label"].textContent = "Refresh";
+  elements["refresh-countdown"].textContent = "";
+}
+
+function scheduleSelectedSessionPoll() {
+  clearTimeout(state.pollTimer);
+  state.pollTimer = null;
+  if (!state.autoRefresh || !state.selectedID ||
+      (state.selectedAnalysisStatus !== "queued" && state.selectedAnalysisStatus !== "running")) return;
+  const id = state.selectedID;
+  state.pollTimer = setTimeout(() => {
+    if (state.selectedID === id) {
+      void selectSession(id, false);
+      void loadSessions(false);
+    }
+  }, 1800);
+}
+
 function startRefreshCountdown() {
   clearInterval(refreshTimer);
+  if (!state.autoRefresh) {
+    stopScheduledRefreshes();
+    return;
+  }
   refreshSeconds = refreshIntervalSeconds;
   updateRefreshButton();
   refreshTimer = setInterval(() => {
@@ -231,9 +273,8 @@ async function selectSession(id, updateURL) {
       request("/sessions/" + encodeURIComponent(id) + "/messages?include_tools=true")
     ]);
     renderDetail(session, messageData.messages);
-    if (session.analysis_status === "queued" || session.analysis_status === "running") {
-      state.pollTimer = setTimeout(() => { selectSession(id, false); loadSessions(false); }, 1800);
-    }
+    state.selectedAnalysisStatus = session.analysis_status;
+    scheduleSelectedSessionPoll();
   } catch (error) {
     elements["detail-content"].replaceChildren(element("div", "state-line", error.message));
   }
@@ -501,6 +542,17 @@ for (const id of filterIDs) {
   elements[id].addEventListener(eventName, applyFilters);
 }
 elements["load-more"].addEventListener("click", () => loadSessions(true));
+elements["auto-refresh-toggle"].checked = state.autoRefresh;
+elements["auto-refresh-toggle"].addEventListener("change", (event) => {
+  state.autoRefresh = event.currentTarget.checked;
+  saveAutoRefreshPreference(state.autoRefresh);
+  if (state.autoRefresh) {
+    startRefreshCountdown();
+    scheduleSelectedSessionPoll();
+  } else {
+    stopScheduledRefreshes();
+  }
+});
 elements["refresh-button"].addEventListener("click", () => refreshPageData(true));
 elements["session-results"].addEventListener("keydown", (event) => {
   if (event.key !== "ArrowDown" && event.key !== "ArrowUp" && event.key !== "Enter") return;
