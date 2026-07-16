@@ -134,8 +134,9 @@ dialog input[type="text"] { width: 100%; }
 
 @media (max-width: 800px) {
   body { overflow: auto; min-height: 100%; height: auto; }
-  .app-header { position: sticky; top: 0; z-index: 30; }
-  .brand-block { align-self: flex-start; padding-top: 7px; }
+  .app-header { position: sticky; top: 0; z-index: 30; display: block; }
+  .brand-block { margin-bottom: 8px; padding-top: 0; }
+  .header-actions { justify-content: flex-start; }
   .filter-bar { grid-template-columns: minmax(0, 1fr) 120px; }
   .search-field { grid-column: 1 / -1; }
   .workspace { min-height: 0; display: block; }

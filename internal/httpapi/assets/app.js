@@ -261,6 +261,7 @@ function renderSessions() {
 
 async function selectSession(id, updateURL) {
   state.selectedID = id;
+  state.selectedAnalysisStatus = "";
   if (updateURL) setURLFromFilters();
   for (const row of elements["session-results"].children) row.setAttribute("aria-selected", String(row.dataset.sessionId === id));
   elements["detail-empty"].hidden = true;
@@ -272,10 +273,12 @@ async function selectSession(id, updateURL) {
       request("/sessions/" + encodeURIComponent(id)),
       request("/sessions/" + encodeURIComponent(id) + "/messages?include_tools=true")
     ]);
+    if (state.selectedID !== id) return;
     renderDetail(session, messageData.messages);
     state.selectedAnalysisStatus = session.analysis_status;
     scheduleSelectedSessionPoll();
   } catch (error) {
+    if (state.selectedID !== id) return;
     elements["detail-content"].replaceChildren(element("div", "state-line", error.message));
   }
 }

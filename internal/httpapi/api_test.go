@@ -187,6 +187,43 @@ func TestWebApplicationIncludesCoreWorkflows(t *testing.T) {
 	}
 }
 
+func TestWebApplicationHeaderStacksAtIntermediateWidths(t *testing.T) {
+	css, err := webAssets.ReadFile("assets/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	styles := string(css)
+	start := strings.Index(styles, "@media (max-width: 800px)")
+	if start < 0 {
+		t.Fatal("embedded CSS missing 800px breakpoint")
+	}
+	remainder := styles[start:]
+	end := strings.Index(remainder[1:], "@media ")
+	if end < 0 {
+		t.Fatal("embedded CSS missing breakpoint after 800px contract")
+	}
+	intermediate := remainder[:end+1]
+	for _, style := range []string{
+		".app-header { position: sticky; top: 0; z-index: 30; display: block; }",
+		".brand-block { margin-bottom: 8px; padding-top: 0; }",
+		".header-actions { justify-content: flex-start; }",
+	} {
+		if !strings.Contains(intermediate, style) {
+			t.Errorf("800px header contract missing %q", style)
+		}
+	}
+	for _, style := range []string{
+		"#refresh-button { width: 126px;",
+		".auto-refresh-control { width: 104px;",
+		"@media (max-width: 480px)",
+		".header-actions button { padding: 0 8px; }",
+	} {
+		if !strings.Contains(styles, style) {
+			t.Errorf("responsive refresh contract missing %q", style)
+		}
+	}
+}
+
 func TestSessionReadEndpoints(t *testing.T) {
 	handler, _, _, _, _, _ := testHandler(t)
 
@@ -310,6 +347,18 @@ func TestCmuxRefreshAndManualTitlePush(t *testing.T) {
 	}
 
 	integration.err = errors.New("dial unix /private/cmux.sock: connection refused")
+	response = serve(application, jsonRequest(http.MethodPost, "/test-token/api/cmux/refresh", `{}`))
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("partial reconciliation status = %d body=%s", response.Code, response.Body.String())
+	}
+	if body := response.Body.String(); !strings.Contains(body, `"code":"cmux_reconciliation_failed"`) ||
+		!strings.Contains(body, `"message":"cmux reconciliation could not be completed"`) {
+		t.Fatalf("partial reconciliation body = %s", body)
+	} else if strings.Contains(body, "/private/cmux.sock") {
+		t.Fatalf("partial reconciliation response leaked socket path: %s", body)
+	}
+
+	integration.status = store.CmuxStatus{Available: false, Error: "cmux is unavailable"}
 	response = serve(application, jsonRequest(http.MethodPost, "/test-token/api/cmux/refresh", `{}`))
 	if response.Code != http.StatusServiceUnavailable {
 		t.Fatalf("unavailable refresh status = %d body=%s", response.Code, response.Body.String())

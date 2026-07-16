@@ -511,6 +511,10 @@ func (h *handler) refreshCmux(response http.ResponseWriter, request *http.Reques
 		return
 	}
 	if err := h.cmux.Refresh(request.Context()); err != nil {
+		if h.cmux.Status().Available {
+			writeError(response, http.StatusInternalServerError, "cmux_reconciliation_failed", "cmux reconciliation could not be completed")
+			return
+		}
 		writeError(response, http.StatusServiceUnavailable, "cmux_unavailable", "cmux is unavailable")
 		return
 	}

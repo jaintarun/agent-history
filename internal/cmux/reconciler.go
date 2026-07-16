@@ -364,7 +364,7 @@ func (r *Reconciler) Status() store.CmuxStatus {
 
 func (r *Reconciler) refreshAndLog(ctx context.Context) {
 	if err := r.Refresh(ctx); err != nil && ctx.Err() == nil {
-		r.logger.Warn("cmux reconciliation unavailable", "error", err)
+		r.logger.Warn("cmux reconciliation failed", "error", err)
 	}
 }
 
