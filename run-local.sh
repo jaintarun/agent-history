@@ -4,7 +4,7 @@ set -eu
 repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 cd "$repo_dir"
 
-go build -trimpath -ldflags '-X main.version=v0.1.7' -o agent-history ./cmd/agent-history
+go build -trimpath -ldflags '-X main.version=v0.1.8' -o agent-history ./cmd/agent-history
 
 exec ./agent-history serve \
   --bind 127.0.0.1:54321 \

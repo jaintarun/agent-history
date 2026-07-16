@@ -171,6 +171,18 @@ filter sessions by `Open in cmux`, shows the current workspace or exact tab
 title beside the generated title, and provides an explicit **Send Agent
 History title to cmux** action when they differ.
 
+Open exactly matched Claude and Codex workspaces are colored from imported
+transcript activity: Green through one hour, Orange after one hour and before
+five hours, and Red at five hours or later. A shared workspace uses its most
+recently active mapped agent. Terminal-only workspaces are not modified.
+Transcript scans run every 15 minutes, so activity-color changes can lag by one
+scan interval.
+
+The header's **Auto refresh** checkbox controls only scheduled browser fetches
+and is remembered by that browser. Turning it off also stops selected-analysis
+polling; manual Refresh, background history scanning, analysis, and cmux color
+reconciliation continue.
+
 Automatic title sync is off by default. Enable **Automatically sync titles to
 cmux** in Settings to opt in. Automatic sync writes only a current generated
 title in a workspace containing one matched agent session, and it preserves a
