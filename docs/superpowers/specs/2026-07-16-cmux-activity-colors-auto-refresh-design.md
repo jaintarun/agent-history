@@ -224,4 +224,3 @@ checks will confirm:
   still preserves the current filter and selected session; and
 - the page has no overlap or horizontal scrolling in desktop and narrow
   viewports.
-
