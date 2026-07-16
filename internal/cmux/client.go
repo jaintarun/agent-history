@@ -37,6 +37,7 @@ type Workspace struct {
 	Title          string `json:"title"`
 	CustomTitle    string `json:"custom_title"`
 	HasCustomTitle bool   `json:"has_custom_title"`
+	CustomColor    string `json:"custom_color"`
 }
 
 // Surface is one exact cmux tab/surface in a workspace.
@@ -87,6 +88,15 @@ func (c *Client) RenameWorkspace(ctx context.Context, workspaceID, title string)
 	return c.call(ctx, "workspace.rename", map[string]any{
 		"workspace_id": workspaceID,
 		"title":        title,
+	}, &struct{}{})
+}
+
+// SetWorkspaceColor assigns one exact hex color to a cmux workspace.
+func (c *Client) SetWorkspaceColor(ctx context.Context, workspaceID, color string) error {
+	return c.call(ctx, "workspace.action", map[string]any{
+		"action":       "set_color",
+		"workspace_id": workspaceID,
+		"color":        color,
 	}, &struct{}{})
 }
 
