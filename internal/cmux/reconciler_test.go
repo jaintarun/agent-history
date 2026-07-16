@@ -2,6 +2,7 @@ package cmux
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"path/filepath"
@@ -12,6 +13,149 @@ import (
 
 	"github.com/tarunjain/agent-history/internal/store"
 )
+
+func TestWorkspaceActivityColorBoundaries(t *testing.T) {
+	now := time.Date(2026, 7, 16, 16, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name string
+		at   time.Time
+		want string
+	}{
+		{name: "future", at: now.Add(time.Minute), want: workspaceGreen},
+		{name: "current", at: now, want: workspaceGreen},
+		{name: "one hour", at: now.Add(-time.Hour), want: workspaceGreen},
+		{name: "after one hour", at: now.Add(-time.Hour - time.Nanosecond), want: workspaceOrange},
+		{name: "before five hours", at: now.Add(-5*time.Hour + time.Nanosecond), want: workspaceOrange},
+		{name: "five hours", at: now.Add(-5 * time.Hour), want: workspaceRed},
+		{name: "after five hours", at: now.Add(-8 * time.Hour), want: workspaceRed},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := workspaceActivityColor(now, test.at); got != test.want {
+				t.Fatalf("workspaceActivityColor() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestActivityColorsUseNewestMappedSessionAndSkipUnmatchedWorkspaces(t *testing.T) {
+	now := time.Date(2026, 7, 16, 16, 0, 0, 0, time.UTC)
+	database := openReconcilerStore(t)
+	upsertAnalyzedSessionAt(t, database, "old", "codex", "n1", "Old", "current", now.Add(-8*time.Hour))
+	upsertAnalyzedSessionAt(t, database, "new", "claude", "n2", "New", "current", now.Add(-2*time.Hour))
+	home := t.TempDir()
+	writeHookFixture(t, home, "codex", hookJSON("n1", "w1", "s1", "idle"))
+	writeHookFixture(t, home, "claude", hookJSON("n2", "w1", "s2", "needsInput"))
+	api := &fakeAPI{
+		capabilities: Capabilities{AccessMode: "allowAll"},
+		workspaces:   []Workspace{{ID: "w1"}, {ID: "terminal-only", CustomColor: "#1565C0"}},
+		surfaces: map[string][]Surface{
+			"w1": {{ID: "s1"}, {ID: "s2"}}, "terminal-only": {{ID: "shell"}},
+		},
+	}
+	reconciler := NewReconciler(api, database, home, slog.Default())
+	reconciler.now = func() time.Time { return now }
+
+	if err := reconciler.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(api.colorCalls) != 1 || api.colorCalls[0] != (colorCall{workspaceID: "w1", color: workspaceOrange}) {
+		t.Fatalf("color calls = %#v", api.colorCalls)
+	}
+	if api.workspaces[1].CustomColor != "#1565C0" {
+		t.Fatalf("terminal-only color changed to %q", api.workspaces[1].CustomColor)
+	}
+}
+
+func TestActivityColorsSkipCorrectColorAndReplaceDifferentColor(t *testing.T) {
+	now := time.Date(2026, 7, 16, 16, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name         string
+		currentColor string
+		wantCalls    int
+	}{
+		{name: "already correct", currentColor: workspaceGreen, wantCalls: 0},
+		{name: "replace manual color", currentColor: "#1565C0", wantCalls: 1},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			database := openReconcilerStore(t)
+			upsertAnalyzedSessionAt(t, database, "session", "codex", "native", "Title", "current", now.Add(-30*time.Minute))
+			home := t.TempDir()
+			writeHookFixture(t, home, "codex", hookJSON("native", "w1", "s1", "idle"))
+			api := &fakeAPI{
+				capabilities: Capabilities{AccessMode: "allowAll"},
+				workspaces:   []Workspace{{ID: "w1", CustomColor: test.currentColor}},
+				surfaces:     map[string][]Surface{"w1": {{ID: "s1"}}},
+			}
+			reconciler := NewReconciler(api, database, home, slog.Default())
+			reconciler.now = func() time.Time { return now }
+
+			if err := reconciler.Refresh(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if len(api.colorCalls) != test.wantCalls {
+				t.Fatalf("color calls = %#v, want %d", api.colorCalls, test.wantCalls)
+			}
+			if test.wantCalls == 1 && api.colorCalls[0].color != workspaceGreen {
+				t.Fatalf("replacement color = %q", api.colorCalls[0].color)
+			}
+		})
+	}
+}
+
+func TestActivityColorFailureDoesNotStopOtherWorkspaces(t *testing.T) {
+	now := time.Date(2026, 7, 16, 16, 0, 0, 0, time.UTC)
+	database := openReconcilerStore(t)
+	upsertAnalyzedSessionAt(t, database, "one", "codex", "n1", "One", "current", now.Add(-30*time.Minute))
+	upsertAnalyzedSessionAt(t, database, "two", "claude", "n2", "Two", "current", now.Add(-6*time.Hour))
+	home := t.TempDir()
+	writeHookFixture(t, home, "codex", hookJSON("n1", "w1", "s1", "running"))
+	writeHookFixture(t, home, "claude", hookJSON("n2", "w2", "s2", "idle"))
+	api := &fakeAPI{
+		capabilities: Capabilities{AccessMode: "allowAll"},
+		workspaces:   []Workspace{{ID: "w1"}, {ID: "w2"}},
+		surfaces: map[string][]Surface{
+			"w1": {{ID: "s1"}}, "w2": {{ID: "s2"}},
+		},
+		colorErrors: map[string]error{"w1": errors.New("rejected")},
+	}
+	reconciler := NewReconciler(api, database, home, slog.Default())
+	reconciler.now = func() time.Time { return now }
+
+	err := reconciler.Refresh(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "w1") {
+		t.Fatalf("Refresh error = %v", err)
+	}
+	if len(api.colorCalls) != 2 || api.colorCalls[0].workspaceID != "w1" || api.colorCalls[1].workspaceID != "w2" {
+		t.Fatalf("color calls = %#v", api.colorCalls)
+	}
+	if api.workspaces[1].CustomColor != workspaceRed {
+		t.Fatalf("successful workspace color = %q", api.workspaces[1].CustomColor)
+	}
+}
+
+func TestRefreshWithoutSyncDoesNotWriteActivityColors(t *testing.T) {
+	now := time.Date(2026, 7, 16, 16, 0, 0, 0, time.UTC)
+	database := openReconcilerStore(t)
+	upsertAnalyzedSessionAt(t, database, "session", "codex", "native", "Title", "current", now)
+	home := t.TempDir()
+	writeHookFixture(t, home, "codex", hookJSON("native", "w1", "s1", "running"))
+	api := &fakeAPI{
+		capabilities: Capabilities{AccessMode: "allowAll"},
+		workspaces:   []Workspace{{ID: "w1"}},
+		surfaces:     map[string][]Surface{"w1": {{ID: "s1"}}},
+	}
+	reconciler := NewReconciler(api, database, home, slog.Default())
+	reconciler.now = func() time.Time { return now }
+
+	if err := reconciler.RefreshWithoutSync(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(api.colorCalls) != 0 {
+		t.Fatalf("color calls = %#v, want none", api.colorCalls)
+	}
+}
 
 func TestReconcilerMatchesOnlyExactOpenSessions(t *testing.T) {
 	database := openReconcilerStore(t)
@@ -170,6 +314,11 @@ func TestManualPushRenamesExactTabButNotSharedWorkspace(t *testing.T) {
 	}
 }
 
+type colorCall struct {
+	workspaceID string
+	color       string
+}
+
 type fakeAPI struct {
 	mu           sync.Mutex
 	capabilities Capabilities
@@ -177,6 +326,8 @@ type fakeAPI struct {
 	workspaces   []Workspace
 	surfaces     map[string][]Surface
 	calls        []string
+	colorCalls   []colorCall
+	colorErrors  map[string]error
 }
 
 func (f *fakeAPI) Capabilities(context.Context) (Capabilities, error) {
@@ -217,6 +368,21 @@ func (f *fakeAPI) RenameSurface(_ context.Context, workspaceID, surfaceID, title
 	return f.err
 }
 
+func (f *fakeAPI) SetWorkspaceColor(_ context.Context, workspaceID, color string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.colorCalls = append(f.colorCalls, colorCall{workspaceID: workspaceID, color: color})
+	if err := f.colorErrors[workspaceID]; err != nil {
+		return err
+	}
+	for index := range f.workspaces {
+		if f.workspaces[index].ID == workspaceID {
+			f.workspaces[index].CustomColor = color
+		}
+	}
+	return nil
+}
+
 func (f *fakeAPI) clearCalls() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -251,17 +417,26 @@ func openReconcilerStore(t *testing.T) *store.Store {
 func upsertAnalyzedSession(t *testing.T, database *store.Store, id, agent, nativeID, title, status string) {
 	t.Helper()
 	started := time.Date(2026, 7, 14, 10, 0, 0, 0, time.UTC)
+	upsertAnalyzedSessionAt(t, database, id, agent, nativeID, title, status, started.Add(time.Hour))
+}
+
+func upsertAnalyzedSessionAt(
+	t *testing.T, database *store.Store, id, agent, nativeID, title, status string,
+	lastActive time.Time,
+) {
+	t.Helper()
+	started := lastActive.Add(-time.Hour)
 	session := store.Session{
 		ID: id, Agent: agent, NativeSessionID: nativeID, SourcePath: "/tmp/" + id,
-		SourceSize: 1, SourceMTime: started, SourceHash: "hash-" + id,
-		WorkingDirectory: "/tmp/project", StartedAt: started, LastActiveAt: started.Add(time.Hour),
+		SourceSize: 1, SourceMTime: lastActive, SourceHash: "hash-" + id,
+		WorkingDirectory: "/tmp/project", StartedAt: started, LastActiveAt: lastActive,
 	}
 	if err := database.UpsertSession(context.Background(), session); err != nil {
 		t.Fatal(err)
 	}
 	if err := database.ReplaceAnalysis(context.Background(), id, store.Analysis{
 		Title: title, Summary: "summary", Status: "current", Provider: "fake", Model: "test",
-		PromptVersion: "v1", AnalyzedAt: started.Add(time.Hour), AnalyzedHash: "analysis-" + id,
+		PromptVersion: "v1", AnalyzedAt: lastActive, AnalyzedHash: "analysis-" + id,
 	}); err != nil {
 		t.Fatal(err)
 	}

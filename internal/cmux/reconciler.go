@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -13,6 +14,24 @@ import (
 	"github.com/tarunjain/agent-history/internal/store"
 )
 
+const (
+	workspaceGreen  = "#196F3D"
+	workspaceOrange = "#A04000"
+	workspaceRed    = "#C0392B"
+)
+
+func workspaceActivityColor(now, lastActive time.Time) string {
+	age := now.Sub(lastActive)
+	switch {
+	case age <= time.Hour:
+		return workspaceGreen
+	case age < 5*time.Hour:
+		return workspaceOrange
+	default:
+		return workspaceRed
+	}
+}
+
 // API is the cmux control boundary used by the reconciler.
 type API interface {
 	Capabilities(context.Context) (Capabilities, error)
@@ -20,9 +39,10 @@ type API interface {
 	Surfaces(context.Context, string) ([]Surface, error)
 	RenameWorkspace(context.Context, string, string) error
 	RenameSurface(context.Context, string, string, string) error
+	SetWorkspaceColor(context.Context, string, string) error
 }
 
-// Reconciler joins live cmux state to imported sessions and owns title writes.
+// Reconciler joins live cmux state to imported sessions and owns title and color writes.
 type Reconciler struct {
 	api    API
 	store  *store.Store
@@ -36,9 +56,10 @@ type Reconciler struct {
 type liveSnapshot struct {
 	states              map[string]store.CmuxSessionState
 	sessionsInWorkspace map[string]int
+	workspaces          map[string]Workspace
 }
 
-// NewReconciler creates a serialized cmux state and title coordinator.
+// NewReconciler creates a serialized cmux state, title, and color coordinator.
 func NewReconciler(api API, database *store.Store, home string, logger *slog.Logger) *Reconciler {
 	if logger == nil {
 		logger = slog.Default()
@@ -46,7 +67,7 @@ func NewReconciler(api API, database *store.Store, home string, logger *slog.Log
 	return &Reconciler{api: api, store: database, home: home, logger: logger, now: time.Now}
 }
 
-// Refresh stores current cmux state and applies eligible automatic title sync.
+// Refresh stores current cmux state and applies eligible title and color sync.
 func (r *Reconciler) Refresh(ctx context.Context) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -61,22 +82,24 @@ func (r *Reconciler) RefreshWithoutSync(ctx context.Context) error {
 	return err
 }
 
-func (r *Reconciler) refreshLocked(ctx context.Context, allowSync bool) error {
+func (r *Reconciler) refreshLocked(ctx context.Context, allowWrites bool) error {
 	snapshot, err := r.snapshotLocked(ctx)
 	if err != nil {
 		return err
 	}
-	if !allowSync {
+	if !allowWrites {
 		return nil
 	}
+
+	wrote, syncErr := r.syncWorkspaceColors(ctx, snapshot)
 	enabled, err := r.autoSyncEnabled(ctx)
 	if err != nil {
-		return err
+		syncErr = errors.Join(syncErr, err)
+	} else if enabled {
+		titleWrote, err := r.syncEligibleTitles(ctx, snapshot)
+		wrote = wrote || titleWrote
+		syncErr = errors.Join(syncErr, err)
 	}
-	if !enabled {
-		return nil
-	}
-	wrote, syncErr := r.syncEligibleTitles(ctx, snapshot)
 	if wrote {
 		if _, err := r.snapshotLocked(ctx); err != nil {
 			syncErr = errors.Join(syncErr, err)
@@ -133,6 +156,7 @@ func (r *Reconciler) snapshotLocked(ctx context.Context) (liveSnapshot, error) {
 	snapshot := liveSnapshot{
 		states:              make(map[string]store.CmuxSessionState),
 		sessionsInWorkspace: make(map[string]int),
+		workspaces:          workspaceByID,
 	}
 	for _, mapping := range mappings {
 		sessionID, exists := identityByNative[mapping.Agent+"\x00"+mapping.NativeSessionID]
@@ -187,6 +211,42 @@ func (r *Reconciler) autoSyncEnabled(ctx context.Context) (bool, error) {
 		return false, fmt.Errorf("invalid cmux.title_sync setting: %w", err)
 	}
 	return enabled, nil
+}
+
+func (r *Reconciler) syncWorkspaceColors(ctx context.Context, snapshot liveSnapshot) (bool, error) {
+	latest := make(map[string]time.Time)
+	var syncErrors []error
+	for sessionID, observed := range snapshot.states {
+		detail, err := r.store.GetSession(ctx, sessionID)
+		if err != nil {
+			syncErrors = append(syncErrors, fmt.Errorf("load activity for session %s: %w", sessionID, err))
+			continue
+		}
+		if detail.Session.LastActiveAt.After(latest[observed.WorkspaceID]) {
+			latest[observed.WorkspaceID] = detail.Session.LastActiveAt
+		}
+	}
+
+	workspaceIDs := make([]string, 0, len(latest))
+	for workspaceID := range latest {
+		workspaceIDs = append(workspaceIDs, workspaceID)
+	}
+	sort.Strings(workspaceIDs)
+
+	wrote := false
+	now := r.now().UTC()
+	for _, workspaceID := range workspaceIDs {
+		desired := workspaceActivityColor(now, latest[workspaceID])
+		if strings.EqualFold(strings.TrimSpace(snapshot.workspaces[workspaceID].CustomColor), desired) {
+			continue
+		}
+		if err := r.api.SetWorkspaceColor(ctx, workspaceID, desired); err != nil {
+			syncErrors = append(syncErrors, fmt.Errorf("set cmux workspace color %s: %w", workspaceID, err))
+			continue
+		}
+		wrote = true
+	}
+	return wrote, errors.Join(syncErrors...)
 }
 
 func (r *Reconciler) syncEligibleTitles(ctx context.Context, snapshot liveSnapshot) (bool, error) {
