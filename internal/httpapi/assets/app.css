@@ -42,8 +42,12 @@ h3 { margin-bottom: 5px; font-size: 14px; line-height: 1.4; }
 .auto-refresh-control input { min-height: auto; margin: 0; }
 #refresh-button { width: 126px; display: inline-flex; align-items: center; justify-content: center; gap: 4px; white-space: nowrap; }
 .refresh-countdown { color: var(--text-muted); font-weight: 500; font-variant-numeric: tabular-nums; }
-.filter-bar { padding: 9px 14px; display: grid; grid-template-columns: minmax(240px, 1fr) 125px 145px 145px auto; gap: 8px; align-items: center; background: var(--surface); border-bottom: 1px solid var(--line); }
+.filter-bar { padding: 9px 14px; display: grid; grid-template-columns: minmax(420px, 1fr) 125px 145px 145px auto; gap: 8px; align-items: center; background: var(--surface); border-bottom: 1px solid var(--line); }
+.search-controls { min-width: 0; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.search-field { min-width: 180px; flex: 1; }
 .search-field input { width: 100%; }
+.include-messages-control { min-height: 34px; display: inline-flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: 12px; font-weight: 650; white-space: nowrap; }
+.include-messages-control input { min-height: auto; margin: 0; }
 .filter-bar select { width: 100%; }
 .more-filters { position: relative; }
 .more-filters summary { min-height: 34px; padding: 7px 10px; list-style: none; cursor: pointer; border: 1px solid var(--line-strong); border-radius: 4px; background: var(--surface); font-weight: 600; white-space: nowrap; }
@@ -141,13 +145,18 @@ dialog input[type="text"] { width: 100%; }
 .error-text { min-height: 18px; margin: 0; color: var(--red); font-size: 12px; }
 .toast { position: fixed; right: 18px; bottom: 18px; z-index: 50; max-width: min(420px, calc(100vw - 36px)); padding: 10px 13px; border: 1px solid #8cae9a; border-radius: 4px; background: #173f31; color: #fff; box-shadow: 0 8px 22px rgba(20, 24, 19, .2); }
 
+@media (max-width: 1000px) {
+  .filter-bar { grid-template-columns: minmax(0, 1fr) 120px; }
+  .search-controls { grid-column: 1 / -1; }
+}
+
 @media (max-width: 800px) {
   body { overflow: auto; min-height: 100%; height: auto; }
   .app-header { position: sticky; top: 0; z-index: 30; display: block; }
   .brand-block { margin-bottom: 8px; padding-top: 0; }
   .header-actions { justify-content: flex-start; }
   .filter-bar { grid-template-columns: minmax(0, 1fr) 120px; }
-  .search-field { grid-column: 1 / -1; }
+  .search-controls { grid-column: 1 / -1; }
   .workspace { min-height: 0; display: block; }
   .results-pane { height: 44vh; min-height: 320px; border-right: 0; border-bottom: 1px solid var(--line-strong); }
   .detail-pane { min-height: 56vh; overflow: visible; }

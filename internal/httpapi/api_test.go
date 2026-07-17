@@ -116,13 +116,20 @@ func TestWebApplicationIncludesCoreWorkflows(t *testing.T) {
 		"started-after-filter", "started-before-filter", "session-results", "detail-content",
 		"confirm-dialog", "command-dialog", "settings-dialog", "retitle-weak-button", "refresh-button",
 		"refresh-label", "refresh-countdown", "auto-refresh-toggle", "settings-cmux-sync", "settings-cmux-status",
+		"include-messages-filter",
 	} {
 		if !strings.Contains(markup, `id="`+id+`"`) {
 			t.Errorf("embedded HTML missing control %q", id)
 		}
 	}
-	if !strings.Contains(markup, "Automatically sync titles to cmux") {
-		t.Error("embedded HTML missing cmux automatic sync label")
+	for _, content := range []string{
+		"Automatically sync titles to cmux",
+		"Include full conversations",
+		`placeholder="Search summaries and topics"`,
+	} {
+		if !strings.Contains(markup, content) {
+			t.Errorf("embedded HTML missing content %q", content)
+		}
 	}
 	javascript, err := webAssets.ReadFile("assets/app.js")
 	if err != nil {
@@ -151,6 +158,10 @@ func TestWebApplicationIncludesCoreWorkflows(t *testing.T) {
 		`elements["refresh-countdown"].textContent = `,
 		`void refreshPageData(false);`,
 		`elements["refresh-button"].addEventListener("click", () => refreshPageData(true));`,
+		`params.set("include_messages", "true")`,
+		`elements["include-messages-filter"].checked = params.get("include_messages") === "true";`,
+		`function updateSearchPlaceholder()`,
+		`Search summaries and conversations`,
 	} {
 		if !strings.Contains(script, behavior) {
 			t.Errorf("embedded JavaScript missing refresh behavior %q", behavior)
@@ -184,6 +195,9 @@ func TestWebApplicationIncludesCoreWorkflows(t *testing.T) {
 		".cmux-label {",
 		".cmux-band {",
 		".detail-actions .resume-bypass {",
+		".search-controls {",
+		".include-messages-control {",
+		"flex-wrap: wrap;",
 		"font-variant-numeric: tabular-nums;",
 		"@media (max-width: 480px)",
 		".header-actions { justify-content: flex-start; gap: 6px; }",

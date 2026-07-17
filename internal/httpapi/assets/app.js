@@ -58,6 +58,7 @@ function setURLFromFilters() {
     const value = elements[id].value.trim();
     if (value && !(id === "sort-filter" && value === "last_active")) params.set(filterParams[id], value);
   }
+  if (elements["include-messages-filter"].checked) params.set("include_messages", "true");
   if (state.selectedID) params.set("session", state.selectedID);
   history.replaceState(null, "", basePath + (params.size ? "?" + params.toString() : ""));
   renderFilterChips();
@@ -66,6 +67,8 @@ function setURLFromFilters() {
 function restoreFilters() {
   const params = new URLSearchParams(location.search);
   for (const id of filterIDs) elements[id].value = params.get(filterParams[id]) || (id === "sort-filter" ? "last_active" : "");
+  elements["include-messages-filter"].checked = params.get("include_messages") === "true";
+  updateSearchPlaceholder();
   state.selectedID = params.get("session") || "";
 }
 
@@ -94,6 +97,7 @@ function searchParams(cursor = "") {
   }
   const after = activeAfter(elements["active-filter"].value);
   if (after) params.set("active_after", after);
+  if (elements["include-messages-filter"].checked) params.set("include_messages", "true");
   if (cursor) params.set("cursor", cursor);
   params.set("limit", "50");
   return params;
@@ -133,8 +137,16 @@ function selectedLabel(control) {
   return control.value;
 }
 
+function updateSearchPlaceholder() {
+  elements["session-search"].placeholder = elements["include-messages-filter"].checked
+    ? "Search summaries and conversations"
+    : "Search summaries and topics";
+}
+
 function clearFilters() {
   for (const id of filterIDs) elements[id].value = id === "sort-filter" ? "last_active" : "";
+  elements["include-messages-filter"].checked = false;
+  updateSearchPlaceholder();
   applyFilters();
 }
 
@@ -556,6 +568,10 @@ for (const id of filterIDs) {
   const eventName = id === "session-search" || id === "cwd-filter" ? "input" : "change";
   elements[id].addEventListener(eventName, applyFilters);
 }
+elements["include-messages-filter"].addEventListener("change", () => {
+  updateSearchPlaceholder();
+  applyFilters();
+});
 elements["load-more"].addEventListener("click", () => loadSessions(true));
 elements["auto-refresh-toggle"].checked = state.autoRefresh;
 elements["auto-refresh-toggle"].addEventListener("change", (event) => {

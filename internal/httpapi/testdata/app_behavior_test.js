@@ -11,6 +11,7 @@ const elementIDs = [
   "retitle-weak-button", "scan-button", "settings-button", "filters", "session-search", "agent-filter",
   "active-filter", "cmux-filter", "cwd-filter", "directory-list", "topic-filter", "active-after-filter",
   "active-before-filter", "started-after-filter", "started-before-filter", "status-filter", "sort-filter",
+  "include-messages-filter",
   "filter-chips", "results-heading", "results-status", "session-results", "load-more", "detail-pane",
   "detail-empty", "detail-content", "confirm-dialog", "confirm-delete", "command-dialog", "resume-command",
   "copy-status", "copy-command", "settings-dialog", "settings-form", "settings-provider", "settings-model",
@@ -65,7 +66,7 @@ function deferredResponse() {
   return { promise, resolve, reject };
 }
 
-function createEnvironment(storedPreference) {
+function createEnvironment(storedPreference, search = "") {
   const nodes = Object.fromEntries(elementIDs.map((id) => [id, new FakeNode("div", id)]));
   for (const id of ["agent-filter", "active-filter", "cmux-filter", "topic-filter", "status-filter", "sort-filter"]) {
     nodes[id].tagName = "SELECT";
@@ -75,6 +76,7 @@ function createEnvironment(storedPreference) {
   const timeouts = new Map();
   const intervals = new Map();
   const requests = [];
+  const historyPaths = [];
   let nextTimerID = 1;
 
   const environment = {
@@ -83,6 +85,7 @@ function createEnvironment(storedPreference) {
     timeouts,
     intervals,
     requests,
+    historyPaths,
     fetchHandler(url) {
       const path = String(url).replace("/test-token/api", "");
       if (path === "/sessions/facets") return Promise.resolve(fakeResponse({ directories: [] }));
@@ -114,8 +117,8 @@ function createEnvironment(storedPreference) {
   const context = vm.createContext({
     console,
     document,
-    location: { pathname: "/test-token/", search: "" },
-    history: { replaceState() {} },
+    location: { pathname: "/test-token/", search },
+    history: { replaceState(_state, _unused, path) { historyPaths.push(path); } },
     navigator: { clipboard: { writeText: async () => {} } },
     window: { confirm: () => true },
     localStorage: {
@@ -347,12 +350,45 @@ async function testResumePermissionActions() {
   }
 }
 
+async function testSearchScopeControl() {
+  const focused = createEnvironment(undefined, "?q=ledger");
+  await settle();
+  assert.equal(focused.nodes["include-messages-filter"].checked, false);
+  assert.equal(focused.nodes["session-search"].placeholder, "Search summaries and topics");
+  assert.equal(evaluate(focused, 'searchParams().has("include_messages")'), false);
+
+  focused.nodes["include-messages-filter"].checked = true;
+  await dispatch(focused, "include-messages-filter", "change");
+  assert.equal(focused.nodes["session-search"].placeholder, "Search summaries and conversations");
+  assert.equal(evaluate(focused, 'searchParams().get("include_messages")'), "true");
+  assert.match(focused.historyPaths.at(-1), /include_messages=true/);
+
+  evaluate(focused, "clearFilters()");
+  assert.equal(focused.nodes["include-messages-filter"].checked, false);
+  assert.equal(focused.nodes["session-search"].placeholder, "Search summaries and topics");
+  assert.equal(evaluate(focused, 'searchParams().has("include_messages")'), false);
+
+  const restored = createEnvironment("off", "?q=ledger&include_messages=true");
+  await settle();
+  assert.equal(restored.nodes["include-messages-filter"].checked, true);
+  assert.equal(restored.nodes["session-search"].placeholder, "Search summaries and conversations");
+  assert.equal(evaluate(restored, 'searchParams("next").get("include_messages")'), "true");
+  assert.equal(evaluate(restored, 'searchParams("next").get("cursor")'), "next");
+
+  restored.requests.length = 0;
+  await dispatch(restored, "refresh-button", "click");
+  assert.ok(restored.requests.some((request) =>
+    request.url.includes("/sessions?") && request.url.includes("include_messages=true")
+  ));
+}
+
 async function main() {
   await testStoredPreferences();
   await testDisableAndReenable();
   await testDisabledManualRefreshAndPollSuppression();
   await testStaleSelections();
   await testResumePermissionActions();
+  await testSearchScopeControl();
   process.stdout.write("browser behavior assertions passed\n");
 }
 

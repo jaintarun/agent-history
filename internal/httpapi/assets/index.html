@@ -25,10 +25,16 @@
   </header>
 
   <form id="filters" class="filter-bar" role="search">
-    <label class="search-field">
-      <span class="sr-only">Search sessions</span>
-      <input id="session-search" name="q" type="search" autocomplete="off" placeholder="Search sessions, errors, files, or topics">
-    </label>
+    <div class="search-controls">
+      <label class="search-field">
+        <span class="sr-only">Search sessions</span>
+        <input id="session-search" name="q" type="search" autocomplete="off" placeholder="Search summaries and topics">
+      </label>
+      <label class="include-messages-control">
+        <input id="include-messages-filter" type="checkbox">
+        <span>Include full conversations</span>
+      </label>
+    </div>
     <label>
       <span class="sr-only">Agent</span>
       <select id="agent-filter" name="agent" aria-label="Agent">
