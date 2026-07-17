@@ -158,15 +158,112 @@ func TestEnqueuePendingAnalysesQueuesEachCandidate(t *testing.T) {
 	queue := &fakeAnalysisQueue{}
 	options := analyze.Options{Provider: "codex-cli", Model: "test", PromptVersion: "v1", NormalizerVersion: "v1"}
 
-	queued, err := enqueuePendingAnalyses(context.Background(), database, queue, options, true)
+	queued, err := enqueuePendingAnalyses(context.Background(), database, queue, func(context.Context) (analyze.Options, error) {
+		return options, nil
+	}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if queued != 2 || strings.Join(queue.ids, ",") != "session-2,session-1" {
 		t.Fatalf("queued=%d ids=%v", queued, queue.ids)
 	}
-	if queue.options.Model != "test" {
-		t.Fatalf("queued options = %#v", queue.options)
+	if queue.jobs[0].Model != "test" {
+		t.Fatalf("queued options = %#v", queue.jobs)
+	}
+}
+
+func TestEnqueuePendingAnalysesLoadsCurrentOptionsForEachBatch(t *testing.T) {
+	database := &fakePendingStore{ids: []string{"session-1"}}
+	queue := &fakeAnalysisQueue{}
+	current := analyze.Options{
+		Provider: "codex-cli", Model: "first", PromptVersion: "v1", NormalizerVersion: "v1",
+	}
+	load := func(context.Context) (analyze.Options, error) { return current, nil }
+
+	if _, err := enqueuePendingAnalyses(context.Background(), database, queue, load, false); err != nil {
+		t.Fatal(err)
+	}
+	current.Provider, current.Model = "claude-cli", "haiku"
+	if _, err := enqueuePendingAnalyses(context.Background(), database, queue, load, false); err != nil {
+		t.Fatal(err)
+	}
+	if len(queue.jobs) != 2 || queue.jobs[0].Provider != "codex-cli" || queue.jobs[1].Provider != "claude-cli" {
+		t.Fatalf("jobs = %#v", queue.jobs)
+	}
+}
+
+func TestPreferredAnalysisUsesInstalledCLI(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		codex, claude bool
+		provider      string
+		model         string
+	}{
+		{name: "both", codex: true, claude: true, provider: "codex-cli", model: "gpt-5.4-mini"},
+		{name: "codex", codex: true, provider: "codex-cli", model: "gpt-5.4-mini"},
+		{name: "claude", claude: true, provider: "claude-cli", model: "haiku"},
+		{name: "neither", provider: "codex-cli", model: "gpt-5.4-mini"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			providers := []analyze.Provider{
+				{ID: "codex-cli", DefaultModel: "gpt-5.4-mini", Available: test.codex},
+				{ID: "claude-cli", DefaultModel: "haiku", Available: test.claude},
+			}
+			got := preferredAnalysis(providers)
+			if got.Provider != test.provider || got.Model != test.model {
+				t.Fatalf("preferred analysis = %#v", got)
+			}
+		})
+	}
+}
+
+func TestConfiguredAnalysisUsesProviderDefaultAndValidatesInput(t *testing.T) {
+	providers := []analyze.Provider{
+		{ID: "codex-cli", DefaultModel: "gpt-5.4-mini", Available: true},
+		{ID: "claude-cli", DefaultModel: "haiku", Available: true},
+	}
+	for _, test := range []struct {
+		name, provider, model   string
+		wantProvider, wantModel string
+		wantErr                 bool
+	}{
+		{name: "Claude default", provider: "claude-cli", wantProvider: "claude-cli", wantModel: "haiku"},
+		{name: "explicit model", provider: "claude-cli", model: "sonnet", wantProvider: "claude-cli", wantModel: "sonnet"},
+		{name: "unsupported provider", provider: "shell", model: "anything", wantErr: true},
+		{name: "blank model", provider: "codex-cli", model: " ", wantErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := configuredAnalysis(providers, test.provider, test.model)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("configured analysis error = %v, wantErr = %v", err, test.wantErr)
+			}
+			if err == nil && (got.Provider != test.wantProvider || got.Model != test.wantModel) {
+				t.Fatalf("configured analysis = %#v", got)
+			}
+		})
+	}
+}
+
+func TestAnalysisSettingsLoadsPersistedProvider(t *testing.T) {
+	database, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "history.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := database.SetSettings(context.Background(), map[string]string{
+		"analysis.provider": "claude-cli",
+		"analysis.model":    "sonnet",
+		"analysis.auto":     "false",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	options, auto, err := analysisSettings(context.Background(), database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.Provider != "claude-cli" || options.Model != "sonnet" || auto {
+		t.Fatalf("settings = %#v, auto = %v", options, auto)
 	}
 }
 
@@ -215,13 +312,13 @@ func (s *fakePendingStore) PendingAnalysisSessionIDs(context.Context, bool) ([]s
 }
 
 type fakeAnalysisQueue struct {
-	ids     []string
-	options analyze.Options
+	ids  []string
+	jobs []analyze.Options
 }
 
 func (q *fakeAnalysisQueue) Enqueue(_ context.Context, id string, options analyze.Options) (<-chan error, error) {
 	q.ids = append(q.ids, id)
-	q.options = options
+	q.jobs = append(q.jobs, options)
 	done := make(chan error)
 	close(done)
 	return done, nil

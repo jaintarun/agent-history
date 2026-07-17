@@ -32,7 +32,7 @@ import (
 var version = "dev"
 
 var defaultAnalysis = analyze.Options{
-	Provider: "codex-cli", Model: "gpt-5.4-mini", PromptVersion: "v1",
+	Provider: analyze.ProviderCodexCLI, Model: analyze.DefaultCodexModel, PromptVersion: "v1",
 	NormalizerVersion: "v2", LeafTargetChars: 48_000, RollupFanout: 8,
 }
 
@@ -101,20 +101,15 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 		fmt.Fprintf(stderr, "agent-history serve: %v\n", err)
 		return 1
 	}
-	configuredAnalysis := defaultAnalysis
-	configuredAuto := true
-	if fileConfig.Analysis.Provider != "" {
-		configuredAnalysis.Provider = fileConfig.Analysis.Provider
-	}
-	if fileConfig.Analysis.Model != "" {
-		configuredAnalysis.Model = fileConfig.Analysis.Model
-	}
-	if fileConfig.Analysis.Auto != nil {
-		configuredAuto = *fileConfig.Analysis.Auto
-	}
-	if configuredAnalysis.Provider != "codex-cli" || strings.TrimSpace(configuredAnalysis.Model) == "" || len(configuredAnalysis.Model) > 200 {
+	providers, analyzers := analyze.DiscoverCLIProviders(exec.LookPath)
+	configuredOptions, err := configuredAnalysis(providers, fileConfig.Analysis.Provider, fileConfig.Analysis.Model)
+	if err != nil {
 		fmt.Fprintln(stderr, "agent-history serve: config analysis provider/model is not supported")
 		return 1
+	}
+	configuredAuto := true
+	if fileConfig.Analysis.Auto != nil {
+		configuredAuto = *fileConfig.Analysis.Auto
 	}
 
 	resolvedDatabase, err := config.ExpandPath(*databasePath)
@@ -127,7 +122,7 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 		fmt.Fprintf(stderr, "agent-history serve: %v\n", err)
 		return 1
 	}
-	if err := seedAnalysisSettings(ctx, database, configuredAnalysis, configuredAuto); err != nil {
+	if err := seedAnalysisSettings(ctx, database, configuredOptions, configuredAuto); err != nil {
 		_ = database.Close()
 		fmt.Fprintf(stderr, "agent-history serve: seed analysis settings: %v\n", err)
 		return 1
@@ -149,9 +144,7 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 	claudeSource := claude.New(claude.DefaultHome())
 	scanner := source.NewScanner(database, codexSource, claudeSource)
 	launcher := launch.New(database, codexSource, claudeSource)
-	engine := analyze.NewEngine(database, map[string]analyze.Analyzer{
-		"codex-cli": analyze.NewCodexCLI(""),
-	})
+	engine := analyze.NewEngine(database, analyzers)
 	worker := analyze.NewWorker(database, engine, 256)
 	logger := slog.New(slog.NewTextHandler(stderr, nil))
 	home, homeErr := os.UserHomeDir()
@@ -178,7 +171,11 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 		}
 	}
 	queuePending := func(queueContext context.Context, includeFailed bool) {
-		queued, err := enqueuePendingAnalyses(queueContext, database, worker, options, includeFailed)
+		loadOptions := func(loadContext context.Context) (analyze.Options, error) {
+			current, _, err := analysisSettings(loadContext, database)
+			return current, err
+		}
+		queued, err := enqueuePendingAnalyses(queueContext, database, worker, loadOptions, includeFailed)
 		if err != nil && queueContext.Err() == nil {
 			logger.Error("could not queue all pending analyses", "queued", queued, "error", err)
 		} else if queued > 0 {
@@ -259,7 +256,13 @@ type analysisQueue interface {
 	Enqueue(context.Context, string, analyze.Options) (<-chan error, error)
 }
 
-func enqueuePendingAnalyses(ctx context.Context, database pendingAnalysisStore, queue analysisQueue, options analyze.Options, includeFailed bool) (int, error) {
+type analysisOptionsLoader func(context.Context) (analyze.Options, error)
+
+func enqueuePendingAnalyses(ctx context.Context, database pendingAnalysisStore, queue analysisQueue, load analysisOptionsLoader, includeFailed bool) (int, error) {
+	options, err := load(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("load analysis settings: %w", err)
+	}
 	ids, err := database.PendingAnalysisSessionIDs(ctx, includeFailed)
 	if err != nil {
 		return 0, err
@@ -321,6 +324,11 @@ func startScanLoop(ctx context.Context, scanner scanService, startup bool, inter
 
 func analysisSettings(ctx context.Context, database *store.Store) (analyze.Options, bool, error) {
 	options := defaultAnalysis
+	if provider, ok, err := database.Setting(ctx, "analysis.provider"); err != nil {
+		return analyze.Options{}, false, err
+	} else if ok {
+		options.Provider = provider
+	}
 	if model, ok, err := database.Setting(ctx, "analysis.model"); err != nil {
 		return analyze.Options{}, false, err
 	} else if ok {
@@ -337,6 +345,37 @@ func analysisSettings(ctx context.Context, database *store.Store) (analyze.Optio
 		auto = parsed
 	}
 	return options, auto, nil
+}
+
+func preferredAnalysis(providers []analyze.Provider) analyze.Options {
+	options := defaultAnalysis
+	for _, id := range []string{analyze.ProviderCodexCLI, analyze.ProviderClaudeCLI} {
+		if provider, ok := analyze.FindProvider(providers, id); ok && provider.Available {
+			options.Provider = provider.ID
+			options.Model = provider.DefaultModel
+			return options
+		}
+	}
+	return options
+}
+
+func configuredAnalysis(providers []analyze.Provider, providerID, model string) (analyze.Options, error) {
+	options := preferredAnalysis(providers)
+	if providerID != "" {
+		provider, ok := analyze.FindProvider(providers, providerID)
+		if !ok {
+			return analyze.Options{}, errors.New("unsupported analysis provider")
+		}
+		options.Provider = provider.ID
+		options.Model = provider.DefaultModel
+	}
+	if model != "" {
+		options.Model = model
+	}
+	if strings.TrimSpace(options.Model) == "" || len(options.Model) > 200 {
+		return analyze.Options{}, errors.New("unsupported analysis model")
+	}
+	return options, nil
 }
 
 func openBrowser(url string) error {
