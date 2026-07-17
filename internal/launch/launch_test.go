@@ -214,6 +214,50 @@ func TestLauncherRejectsUntrustedSessionMetadata(t *testing.T) {
 	}
 }
 
+func TestLauncherValidatesNormalSpecBeforeBypass(t *testing.T) {
+	database := openLauncherStore(t)
+	cwd := t.TempDir()
+	nativeID := "safe-session"
+	sessionID := importLaunchSession(t, database, "codex", nativeID, cwd, "Untrusted adapter")
+	base := source.ResumeSpec{
+		Agent: "codex", SessionID: nativeID, CWD: cwd,
+		Executable: "codex", Args: []string{"resume", nativeID},
+	}
+	tests := []struct {
+		name   string
+		mutate func(*source.ResumeSpec)
+	}{
+		{name: "agent", mutate: func(spec *source.ResumeSpec) { spec.Agent = "claude" }},
+		{name: "session ID", mutate: func(spec *source.ResumeSpec) { spec.SessionID = "other-session" }},
+		{name: "working directory", mutate: func(spec *source.ResumeSpec) { spec.CWD = "/different" }},
+		{name: "executable", mutate: func(spec *source.ResumeSpec) { spec.Executable = "sh" }},
+		{name: "arguments", mutate: func(spec *source.ResumeSpec) {
+			spec.Args = []string{"resume", "--dangerously-bypass-approvals-and-sandbox", nativeID}
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			spec := base
+			spec.Args = append([]string(nil), base.Args...)
+			test.mutate(&spec)
+			originalArgs := append([]string(nil), spec.Args...)
+			runner := &fakeRunner{path: "/fake/cmux"}
+			launcher := newWithRunner(database, runner, untrustedResumeSource{spec: spec})
+
+			_, err := launcher.Launch(context.Background(), sessionID, "cmux", PermissionBypass)
+			if err == nil || !strings.Contains(err.Error(), "untrusted resume specification") {
+				t.Fatalf("Launch error = %v", err)
+			}
+			if runner.executable != "" || len(runner.args) != 0 {
+				t.Fatalf("runner invoked with %q %q", runner.executable, runner.args)
+			}
+			if !reflect.DeepEqual(spec.Args, originalArgs) {
+				t.Fatalf("source args mutated: got %q, want %q", spec.Args, originalArgs)
+			}
+		})
+	}
+}
+
 func TestLauncherRejectsUnknownPermissionMode(t *testing.T) {
 	database := openLauncherStore(t)
 	sessionID := importLaunchSession(t, database, "codex", "safe-session", t.TempDir(), "Invalid mode")
@@ -233,6 +277,26 @@ func TestPermissionArgsDoesNotMutateNormalSpec(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("bypass args = %q, want %q", got, want)
 	}
+}
+
+type untrustedResumeSource struct {
+	spec source.ResumeSpec
+}
+
+func (untrustedResumeSource) Name() string {
+	return "codex"
+}
+
+func (untrustedResumeSource) Discover(context.Context) ([]source.Candidate, error) {
+	return nil, nil
+}
+
+func (untrustedResumeSource) Read(context.Context, source.Candidate) (source.ImportedSession, error) {
+	return source.ImportedSession{}, nil
+}
+
+func (s untrustedResumeSource) ResumeSpec(store.Session) (source.ResumeSpec, error) {
+	return s.spec, nil
 }
 
 type fakeRunner struct {

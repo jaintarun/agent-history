@@ -475,8 +475,8 @@ func (h *handler) launch(response http.ResponseWriter, request *http.Request) {
 		return
 	}
 	var body struct {
-		Launcher    string `json:"launcher"`
-		Permissions string `json:"permissions"`
+		Launcher    string          `json:"launcher"`
+		Permissions json.RawMessage `json:"permissions"`
 	}
 	if err := decodeJSONBody(response, request, &body); err != nil {
 		writeError(response, http.StatusBadRequest, "invalid_json", err.Error())
@@ -485,18 +485,24 @@ func (h *handler) launch(response http.ResponseWriter, request *http.Request) {
 	if body.Launcher == "" {
 		body.Launcher = "auto"
 	}
-	if body.Permissions == "" {
-		body.Permissions = launch.PermissionNormal
+	permissions := launch.PermissionNormal
+	if len(body.Permissions) > 0 {
+		var supplied *string
+		if err := json.Unmarshal(body.Permissions, &supplied); err != nil || supplied == nil {
+			writeError(response, http.StatusBadRequest, "invalid_permissions", "permissions must be normal or bypass")
+			return
+		}
+		permissions = *supplied
 	}
 	if body.Launcher != "auto" && body.Launcher != "cmux" && body.Launcher != "copy" {
 		writeError(response, http.StatusBadRequest, "invalid_launcher", "launcher must be auto, cmux, or copy")
 		return
 	}
-	if body.Permissions != launch.PermissionNormal && body.Permissions != launch.PermissionBypass {
+	if permissions != launch.PermissionNormal && permissions != launch.PermissionBypass {
 		writeError(response, http.StatusBadRequest, "invalid_permissions", "permissions must be normal or bypass")
 		return
 	}
-	result, err := h.launcher.Launch(request.Context(), request.PathValue("id"), body.Launcher, body.Permissions)
+	result, err := h.launcher.Launch(request.Context(), request.PathValue("id"), body.Launcher, permissions)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			writeError(response, http.StatusNotFound, "not_found", "session not found")

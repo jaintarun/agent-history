@@ -230,6 +230,22 @@ func TestWebApplicationHeaderStacksAtIntermediateWidths(t *testing.T) {
 	}
 }
 
+func TestSessionDetailActionsWrapAtIntermediateWidths(t *testing.T) {
+	css, err := webAssets.ReadFile("assets/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	styles := string(css)
+	for _, style := range []string{
+		".detail-title-line { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; flex-wrap: wrap; }",
+		".detail-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; flex: none; max-width: 100%; }",
+	} {
+		if !strings.Contains(styles, style) {
+			t.Errorf("responsive detail actions missing %q", style)
+		}
+	}
+}
+
 func TestSessionReadEndpoints(t *testing.T) {
 	handler, _, _, _, _, _ := testHandler(t)
 
@@ -496,6 +512,25 @@ func TestLaunchPermissionModeIsValidated(t *testing.T) {
 	))
 	if response.Code != http.StatusBadRequest || launcher.calls != 1 {
 		t.Fatalf("invalid response=%d launcher=%#v body=%s", response.Code, launcher, response.Body.String())
+	}
+
+	for _, test := range []struct {
+		name string
+		body string
+	}{
+		{name: "empty", body: `{"launcher":"auto","permissions":""}`},
+		{name: "null", body: `{"launcher":"auto","permissions":null}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			response := serve(handler, jsonRequest(
+				http.MethodPost,
+				"/test-token/api/sessions/session-1/launch",
+				test.body,
+			))
+			if response.Code != http.StatusBadRequest || launcher.calls != 1 {
+				t.Fatalf("response=%d launcher=%#v body=%s", response.Code, launcher, response.Body.String())
+			}
+		})
 	}
 }
 
