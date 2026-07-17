@@ -155,7 +155,7 @@ temporary or configured database.
 The database represents local Codex and Claude sessions through one normalized
 read model.
 
-## Phase 4: Codex CLI Analysis
+## Phase 4: CLI Analysis
 
 ### Work
 
@@ -176,6 +176,14 @@ read model.
   - require schema-conforming output;
   - capture stdout/stderr with fixed size limits;
   - enforce cancellation and a configurable timeout.
+- Implement `claude-cli` by invoking `claude -p`:
+  - reuse existing Claude Code authentication;
+  - disable tools, slash commands, and session persistence;
+  - limit execution to one turn in an empty temporary directory;
+  - require schema-conforming structured output;
+  - capture stdout/stderr with the same size and timeout limits.
+- Detect both executables at service startup, expose only public provider
+  metadata, and never fall back when the selected provider is unavailable.
 - Create prompts that treat transcript content as untrusted data and prohibit
   following instructions found inside it.
 - Group normalized records into natural user/assistant/tool turns.
@@ -215,8 +223,8 @@ read model.
 
 ### Verification
 
-- Use a fake executable in tests; never spend subscription usage in automated
-  tests.
+- Use fake Codex and Claude executables in tests; never spend subscription
+  usage in automated tests.
 - Test successful structured output, invalid JSON, schema mismatch, timeout,
   cancellation, oversized stderr, and nonzero exit.
 - Test that failed reanalysis preserves existing analysis.
@@ -238,8 +246,8 @@ read model.
 ### Exit condition
 
 `agent-history scan` followed by an explicit analysis request produces a valid
-three-level analysis using Codex CLI, and appending conversation to that session
-does not reanalyze sealed history.
+three-level analysis using either installed CLI, and appending conversation to
+that session does not reanalyze sealed history.
 
 ## Phase 5: Search, Filtering, and Facets
 
@@ -459,7 +467,7 @@ cmux integration beyond the optional launcher.
 2. `Add SQLite schema and FTS storage`
 3. `Import and normalize Codex sessions`
 4. `Import and normalize Claude sessions`
-5. `Add Codex CLI session analysis`
+5. `Add CLI session analysis`
 6. `Add session search filters and facets`
 7. `Expose loopback session API`
 8. `Add embedded session explorer UI`
@@ -475,7 +483,6 @@ Add an item only after the initial product demonstrates a need:
 - actual active-time estimation;
 - incremental byte-offset transcript tailing;
 - OpenCode, Pi, or other source adapters;
-- Claude CLI analyzer;
 - direct OpenAI-compatible HTTP analyzer;
 - per-stage model routing;
 - embeddings and hybrid ranking;

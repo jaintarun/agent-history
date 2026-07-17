@@ -1,246 +1,233 @@
-# agent-history
+# Agent History
 
-`agent-history` is a local Go application for finding, understanding, and
-resuming old Codex and Claude Code sessions. It stores normalized visible
-conversation in SQLite, generates replaceable three-level summaries through the
-Codex CLI, and serves a self-contained search interface from one binary.
+Agent History is a local Go application for finding, understanding, and
+resuming old Codex and Claude Code sessions. It imports visible conversation
+into SQLite, builds replaceable three-level summaries through an authenticated
+Codex or Claude Code CLI, and serves a self-contained search UI.
 
-## Install
+## Quick Start
 
-Requirements:
+### 1. Install and authenticate an analyzer
 
-- macOS;
-- Go 1.24 or newer (the module selects a patched preferred toolchain);
-- an authenticated Codex CLI for analysis; and
-- optional `cmux` for one-click session launch, live session status, and title
-  synchronization.
+Install at least one provider. Agent History reuses the CLI's existing login and
+never reads or stores credentials.
 
-Build from this repository:
+```sh
+# Codex
+npm install -g @openai/codex
+codex login
+
+# Claude Code (alternative or additional provider)
+brew install --cask claude-code
+claude auth login
+```
+
+Claude Code also supports its
+[recommended native installer](https://code.claude.com/docs/en/getting-started).
+
+### 2. Set up cmux
+
+cmux is optional for search and analysis. Install it for live-session status,
+title sync, activity colors, and one-click resume.
+
+```sh
+brew tap manaflow-ai/cmux
+brew install --cask cmux
+open -a cmux
+cmux hooks setup
+cmux hooks setup codex
+```
+
+See the [cmux project and current installation
+instructions](https://github.com/manaflow-ai/cmux).
+
+### 3. Allow direct cmux access
+
+```sh
+defaults write com.cmuxterm.app socketControlMode -string allowAll
+defaults write com.cmuxterm.app workspaceAutoNamingEnabled -bool false
+```
+
+Restart cmux normally, then verify:
+
+```sh
+cmux capabilities --json
+```
+
+The response must report `"access_mode": "allowAll"`.
+
+### 4. Install Agent History
+
+```sh
+git clone https://github.com/jaintarun/agent-history.git
+cd agent-history
+./install-startup.sh
+```
+
+The idempotent macOS installer builds the app, starts the per-user LaunchAgent,
+and keeps it running after login and reboot. Run it again after pulling updates.
+
+### 5. Open the app
+
+Open [http://127.0.0.1:54321/](http://127.0.0.1:54321/), choose the analyzer and
+model in **Settings**, then use **Scan** or wait for the background scanner.
+
+## What It Does
+
+- Discovers Codex rollouts under `CODEX_HOME` or `~/.codex`.
+- Discovers Claude Code project transcripts under `CLAUDE_CONFIG_DIR` or
+  `~/.claude/projects`; nested subagent transcripts are excluded.
+- Removes private reasoning, thinking blocks, system/developer instructions,
+  injected instruction envelopes, and transport metadata before persistence.
+- Stores visible user/assistant text and bounded useful tool facts in SQLite.
+- Generates a session title, overview, chronological topic summaries, and
+  detailed topic evidence.
+- Reuses sealed summaries when a multi-day session grows, analyzing only new
+  conversation and affected rollups.
+- Searches summaries and topics by default, with message fallback for
+  unanalyzed sessions and unsummarized tails.
+- Filters by agent, date ranges, folder, topic count, analysis state, and
+  whether a session is open in cmux.
+- Reanalyzes, retitles, deletes replaceable analysis, rescans, and resumes the
+  original agent session.
+
+Search terms use AND semantics. Enable **Include full conversations** to search
+every retained normalized message; otherwise analyzed transcript text is not
+searched, which keeps results focused.
+
+## Analysis Providers
+
+| Provider | Invocation | Default model | Authentication |
+| --- | --- | --- | --- |
+| Codex | `codex exec` | `gpt-5.4-mini` | Existing Codex CLI login |
+| Claude Code | `claude -p` | `haiku` | Existing Claude Code login |
+
+Provider executables are detected when the service starts. Install a missing
+CLI, authenticate it, then rerun `./install-startup.sh`. Agent History does not
+silently fall back to another provider.
+
+Codex can use an eligible
+[ChatGPT plan](https://help.openai.com/en/articles/11369540-using-codex-with-your-chatgpt-plan).
+Claude Code supports Claude Pro, Max, Team, Enterprise, Console, and documented
+third-party providers; follow
+[Anthropic's authentication guidance](https://code.claude.com/docs/en/getting-started).
+If `ANTHROPIC_API_KEY` is exported into the service environment, Claude Code may
+use that key instead of browser-based subscription authentication. Agent
+History does not implement login or route OAuth itself.
+
+Analysis and title generation consume the selected provider's usage. Scanning,
+filtering, search, cmux reconciliation, and browsing stored results do not call
+a model.
+
+For a new database, optional TOML configuration can seed the first selection:
+
+```toml
+# ~/.config/agent-history/config.toml
+[analysis]
+provider = "claude-cli" # or "codex-cli"
+model = "haiku"
+auto = true
+```
+
+Web settings take precedence after seeding. `auto` controls whether interrupted
+queued/running jobs are requeued at startup. The fixed local service also uses
+`--analyze-pending`, so newly imported or updated sessions are queued
+continuously and serialized through one worker.
+
+## Running Manually
+
+Requirements are macOS and Go 1.24 or newer. The module selects a preferred
+patched Go toolchain.
 
 ```sh
 go build -trimpath -o agent-history ./cmd/agent-history
-./agent-history version
-```
-
-No Node.js runtime, frontend build, external SQLite installation, or API key is
-required.
-
-## Run
-
-Start the application:
-
-```sh
 ./agent-history serve
 ```
 
-By default it binds to a random port on `127.0.0.1`, prints and opens a
-process-specific tokenized URL, scans histories at startup and every 15 minutes,
-and stores data at `~/.local/share/agent-history/history.db`.
+The generic `serve` command binds to a random loopback port, prints and opens a
+tokenized URL, scans at startup and every 15 minutes, and stores data at
+`~/.local/share/agent-history/history.db`.
 
-Useful alternatives:
-
-```sh
-# Print the URL without opening a browser.
-./agent-history serve --no-open
-
-# Disable automatic scans while retaining the Scan button.
-./agent-history serve --scan-on-start=false --scan-interval=0
-
-# Import without starting the server.
-./agent-history scan --agent all
-./agent-history scan --agent codex
-./agent-history scan --agent claude
-```
-
-For the fixed local service used by this repository, run:
+The repository's fixed local command is:
 
 ```sh
 ./run-local.sh
 ```
 
-It serves directly at `http://127.0.0.1:54321/`, scans Codex and Claude history
-at startup and every 15 minutes, and serially queues nonempty sessions that are
-unanalyzed or have new activity. A failed analysis is retried once when the
-process starts, but periodic scans do not repeatedly retry failures. Stop the
-foreground process with `Ctrl-C`.
+It serves directly at `http://127.0.0.1:54321/`, scans every 15 minutes, and
+queues pending analysis. Stop a foreground run with `Ctrl-C`.
 
-To start this fixed local service automatically after logging in to macOS:
+Import without starting the server:
+
+```sh
+./agent-history scan --agent all
+./agent-history scan --agent codex
+./agent-history scan --agent claude
+```
+
+Run `./agent-history serve --help` for bind, database, config, browser, and scan
+options.
+
+## Startup Management
 
 ```sh
 ./install-startup.sh
-```
-
-The idempotent installer creates and loads the per-user LaunchAgent
-`com.tarunjain.agent-history`. It keeps the service running, uses the same
-`run-local.sh` command, and writes output to
-`~/Library/Logs/agent-history.log` and errors to
-`~/Library/Logs/agent-history.error.log`. Running the installer again does not
-create another job.
-
-To stop the job and remove automatic startup:
-
-```sh
 ./uninstall-startup.sh
 ```
 
-The uninstaller is also idempotent. It does not delete the application,
-configuration, imported conversations, summaries, or SQLite database.
-
-Run `agent-history serve --help` for bind, database, config, browser, and scan
-flags.
-
-## Sources
-
-The initial adapters discover Codex rollouts under `CODEX_HOME` or `~/.codex`,
-and Claude Code project transcripts under `CLAUDE_CONFIG_DIR` or
-`~/.claude/projects`. Nested Claude `subagents` transcripts are excluded.
-
-The source transcript remains authoritative. Deleting SQLite and scanning again
-reconstructs normalized messages deterministically from an unchanged source
-snapshot. Generated summaries are replaceable cache data.
-
-## Analysis
-
-Select **Analyze** or **Reanalyze** in the session detail view. **Retitle** makes
-one smaller model call over stored topic titles and summaries without rereading
-the transcript or regenerating summaries. **Retitle weak titles** queues only
-current titles that are short, generic, or duplicated. One worker serializes
-requests and invokes authenticated `codex exec` in an ephemeral,
-read-only temporary directory with schema-constrained output. The application
-does not store Codex credentials or API keys.
-
-Analysis consumes Codex subscription usage. Scanning and search do not invoke a
-model. Claude Code histories are supported as sources, but this release does
-not use a Claude Max subscription or invoke Claude for summaries.
-
-Change the model in **Settings**. A new database may instead be seeded from:
-
-```toml
-# ~/.config/agent-history/config.toml
-[analysis]
-provider = "codex-cli"
-model = "gpt-5.4-mini"
-auto = true
-```
-
-After seeding, web settings take precedence. `auto` controls whether analysis
-left queued or running by an unclean exit is requeued at startup; it does not
-analyze every imported session automatically. The explicit `--analyze-pending`
-serve flag enables that continuous local workflow and consumes Codex
-subscription usage for newly queued work.
-
-The summarizer uses content-addressed sealed leaves, chronological topic nodes,
-and a session rollup. Appending conversation analyzes only new leaves and the
-affected rollup path. Changing model, prompt version, or normalizer version
-intentionally invalidates the applicable summary cache.
-
-## Search And Actions
-
-The embedded UI supports:
-
-- focused full-text search over generated titles, summaries, and topics, with
-  automatic normalized-message fallback for unanalyzed sessions and new
-  unsummarized activity;
-- an **Include full conversations** option that also searches all normalized
-  visible messages and retained tool facts;
-- agent, last-active preset, exact active/started range, folder, topic-count,
-  analysis-state, and open-in-cmux filters;
-- stable cursor pagination and last-active, started, or title sorting;
-- start, last activity, total span, source path, and native session ID;
-- overview, topic chapters, detailed evidence, and visible messages;
-- Analyze, Reanalyze, Retitle, Retitle weak titles, Delete analysis, Rescan,
-  Scan, Settings, Resume normally, and an agent-specific permission-bypass
-  resume action; and
-- keyboard result navigation and a responsive narrow layout.
-
-Search terms use AND semantics within one eligible summary, topic, or message.
-Working directories use the dedicated folder filter instead of keyword search.
-API clients can opt into all normalized messages with
-`GET /api/sessions?q=...&include_messages=true`; omission or `false` uses focused
-search.
-
-Delete analysis preserves imported messages. Resume uses only validated stored
-metadata. Codex sessions show **Resume normally** and **Resume with YOLO**;
-Claude sessions show **Resume normally** and **Resume with dangerously skipped
-permissions**. The bypass actions generate:
+The installer creates `io.github.jaintarun.agent-history`, migrates the legacy
+LaunchAgent label if present, preserves paths containing spaces, and avoids
+duplicate jobs. Logs are written to:
 
 ```text
-codex resume --dangerously-bypass-approvals-and-sandbox <session-id>
-claude --dangerously-skip-permissions --resume <session-id>
+~/Library/Logs/agent-history.log
+~/Library/Logs/agent-history.error.log
 ```
 
-These actions disable the corresponding vendor safeguards for the resumed
-process and must be chosen explicitly for each launch. The browser can select
-only normal or bypass; it cannot submit flags or command text. `auto` launches
-`cmux workspace create` when cmux is installed; otherwise the UI returns a
-safely quoted resume command to copy.
+The uninstaller is also idempotent. It stops automatic startup but keeps the
+repository, configuration, imported conversations, summaries, and database.
 
-## cmux Status And Title Sync
+## cmux Integration
 
-Agent History can match an imported Claude or Codex session to an open cmux
-tab using cmux's native hook session ID. It does not infer matches from titles,
-folders, or timestamps. Enable direct local socket access once on this Mac:
+Agent History matches open tabs only through native Codex or Claude session IDs;
+it does not guess from titles, folders, or timestamps. When cmux access is
+`allowAll`, the UI can:
 
-```sh
-defaults write com.cmuxterm.app socketControlMode -string allowAll
-defaults write com.cmuxterm.app workspaceAutoNamingEnabled -bool false
-cmux capabilities --json
-```
+- filter sessions open in cmux;
+- compare cmux and generated titles;
+- explicitly or automatically send generated titles to cmux;
+- color mapped AI-agent workspaces by last transcript activity: green through
+  one hour, orange after one and before five hours, red at five hours or later;
+  and
+- resume normally or with an explicit agent-specific permission bypass.
 
-The capabilities response must report `"access_mode": "allowAll"`. Agent
-History then refreshes cmux state at startup and every minute. The web page can
-filter sessions by `Open in cmux`, shows the current workspace or exact tab
-title beside the generated title, and provides an explicit **Send Agent
-History title to cmux** action when they differ.
+Codex shows **Resume normally** and **Resume with YOLO**. Claude shows **Resume
+normally** and **Resume with dangerously skipped permissions**. Bypass actions
+disable vendor safeguards and must be selected explicitly. Terminal-only cmux
+workspaces are not recolored.
 
-Open exactly matched Claude and Codex workspaces are colored from imported
-transcript activity: Green through one hour, Orange after one hour and before
-five hours, and Red at five hours or later. A shared workspace uses its most
-recently active mapped agent. Terminal-only workspaces are not modified.
-Transcript scans run every 15 minutes, so activity-color changes can lag by one
-scan interval.
+If cmux is closed or unavailable, importing, analysis, and search continue.
 
-The header's **Auto refresh** checkbox controls only scheduled browser fetches
-and is remembered by that browser. Turning it off also stops selected-analysis
-polling; manual Refresh, background history scanning, analysis, and cmux color
-reconciliation continue.
+## Privacy and Security
 
-Automatic title sync is off by default. Enable **Automatically sync titles to
-cmux** in Settings to opt in. Automatic sync writes only a current generated
-title in a workspace containing one matched agent session, and it preserves a
-cmux title changed independently. The explicit send action may replace a
-different title; in a workspace with multiple matched sessions it renames only
-the exact tab.
-
-If cmux is closed, its socket is inaccessible, or access is not `allowAll`, the
-Settings dialog reports cmux as unavailable. History scanning, analysis,
-search, and browsing continue normally.
-
-## Privacy And Security
-
-- Private reasoning, thinking blocks, system/developer instructions,
-  permission envelopes, and transport metadata are excluded before persistence,
-  indexing, or analysis.
-- Visible user/assistant text is retained verbatim. Tool commands and results
-  have fixed retention limits for search and compaction.
+- The source transcript remains authoritative; SQLite is a normalized local
+  index plus replaceable generated analysis.
+- Private reasoning and hidden instructions are excluded before storage,
+  indexing, or model input.
 - Transcript content is untrusted data and is never executed during ingestion.
-- The server accepts only loopback binds, requires a random URL token by
-  default, and validates Host and Origin on mutations. `--no-url-token`
-  explicitly opts into a plain root URL while retaining the loopback bind.
-- Normal logs contain paths, statuses, durations, and aggregate scan counts,
-  not transcript text or request bodies.
-- Settings reject secret-like keys and never return inherited credentials.
-- cmux argv is generated from validated source metadata; the browser cannot
-  submit an executable, arbitrary command, or resume flag.
-- cmux socket paths and raw connection errors are not returned by the web API.
+- Analyzer calls run in temporary directories with no useful tools, bounded
+  output, schema validation, timeouts, and no session persistence.
+- The HTTP server accepts loopback binds only. Random URL tokens are the generic
+  default; `run-local.sh` explicitly uses a plain loopback URL.
+- API settings expose provider names and availability, never executable paths,
+  inherited environment, keys, or credentials.
+- Normal logs omit transcript text and request bodies.
 
-Individual transcripts are limited to 4 GB and individual JSONL records to 64
-MB. These bounds accommodate the measured long-session corpus while preventing
-unbounded reads. Scans and analysis each run with concurrency one.
+See [SECURITY.md](SECURITY.md) for private vulnerability reporting.
 
-## Backup And Rebuild
+## Backup and Rebuild
 
-Use SQLite's online backup command while the server is running:
+Back up the live database with SQLite's online backup command:
 
 ```sh
 mkdir -p "$HOME/Backups/agent-history"
@@ -248,59 +235,9 @@ sqlite3 "$HOME/.local/share/agent-history/history.db" \
   ".backup '$HOME/Backups/agent-history/history.db'"
 ```
 
-To restore, stop `agent-history`, replace the database with the backup, and
-start the server. To rebuild imported history, stop the server, move or delete
-the database, and run `agent-history scan --agent all`. Generated analysis must
-then be recreated because transcripts do not contain it.
-
-## Launch At Login
-
-After placing the binary at an absolute path, create
-`~/Library/LaunchAgents/local.agent-history.plist` with that path substituted:
-
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key><string>local.agent-history</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>/absolute/path/to/agent-history</string>
-    <string>serve</string>
-  </array>
-  <key>RunAtLoad</key><true/>
-  <key>StandardOutPath</key><string>/tmp/agent-history.log</string>
-  <key>StandardErrorPath</key><string>/tmp/agent-history.log</string>
-</dict>
-</plist>
-```
-
-```sh
-launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/local.agent-history.plist"
-```
-
-## LLM Evaluation
-
-Automated tests never invoke a real model. Quality evaluation is a separate,
-explicitly acknowledged command over embedded sanitized multi-day fixtures:
-
-```sh
-./agent-history eval --model gpt-5.4-mini --allow-provider-usage
-```
-
-It reports title specificity, topic count, boundary F1, summary coverage,
-evidence grounding, hidden-term exclusion, structured-output success, analyzer
-calls, approximate input tokens, and append-only input growth. This command
-invokes Codex repeatedly and consumes subscription usage.
-
-## Measured Corpus
-
-On 2026-07-11, a disposable scan imported 173 available sessions (26 Codex and
-147 Claude), including a 1.31 GB Codex rollout, in 57.72 seconds. The normalized
-SQLite/FTS database was about 560 MB. One hundred serial searches completed in
-2.83 seconds; server-side durations were typically 21-23 ms. Active files can
-change during measurement, so these are operational evidence, not guarantees.
+To rebuild, stop Agent History, move or delete the database, and scan again.
+Generated analysis must be recreated because source transcripts do not contain
+it.
 
 ## Development
 
@@ -309,11 +246,21 @@ gofmt -w <changed-go-files>
 go test ./...
 go test -race ./...
 go vet ./...
-govulncheck ./...
+go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 go build ./cmd/agent-history
 ```
 
-Design and acceptance details are in [docs/DESIGN.md](docs/DESIGN.md) and
-[docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md). Deferred work
-includes additional providers, embeddings, cross-session clustering, analysis
-history, cloud synchronization, and a native cmux ExtensionKit frontend.
+Automated tests use fake provider executables and never consume model usage.
+Quality evaluation is separate and explicitly acknowledged:
+
+```sh
+./agent-history eval --model gpt-5.4-mini --allow-provider-usage
+```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md),
+[docs/DESIGN.md](docs/DESIGN.md), and
+[docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md).
+
+## License
+
+[MIT](LICENSE)

@@ -50,10 +50,10 @@ initial feature must improve finding, understanding, or resuming a session.
 
 ### Simple provider boundary
 
-The first analyzer invokes the authenticated Codex CLI. Analysis code depends
-on a small Go interface so a Claude CLI or HTTP provider can be added later.
-There is one global default provider and model, with an optional per-request
-override.
+The shipped analyzers invoke an authenticated Codex CLI or Claude Code CLI
+through the same small Go interface. There is one global provider and model
+selection, with an optional per-request override. Executable discovery is fixed
+and explicit; an unavailable provider never silently falls back to another.
 
 ### Incremental analysis
 
@@ -184,9 +184,9 @@ The detail view exposes only the core actions:
                           |                      |
               boundary scorer + summary tree   |
                           |                      |
-                    analyzer adapter     embedded web UI
+                   analyzer adapters     embedded web UI
                           |                      |
-                      Codex CLI          launcher adapter
+                  Codex / Claude CLI     launcher adapter
                                                /       \
                                              cmux   copy command
 ```
@@ -302,11 +302,12 @@ topics[]
   detail
 ```
 
-The first implementation invokes `codex exec` using the user's existing Codex
-login. It runs ephemerally in an empty temporary directory, uses a read-only
-sandbox, receives the conversation through stdin, and validates the result with
-a JSON Schema. The application does not extract or reuse Codex authentication
-tokens.
+`codex-cli` invokes `codex exec` ephemerally in an empty temporary directory
+with a read-only sandbox. `claude-cli` invokes `claude -p` with no tools, no
+session persistence, one turn, and structured JSON output. Both receive the
+conversation through stdin, reuse the installed CLI's existing authentication,
+bound stdout/stderr and runtime, and validate schema-constrained output. The
+application does not extract or store provider credentials.
 
 #### Sealed leaf blocks
 
@@ -321,11 +322,11 @@ provenance. Sealed leaves are immutable while their input hash and configuration
 remain unchanged. In normal operation, each raw message is included in at most
 one sealed leaf analysis, apart from a small overlap used to preserve context.
 
-The current tail remains unsealed. The service does not invoke Codex after every
-message. It analyzes the tail after a size threshold, an idle period, an explicit
-request for fresh analysis, or a strong boundary. The API reports how far the
-analysis is current so the UI can distinguish fresh analysis from new queued
-conversation.
+The current tail remains unsealed. The service does not invoke the selected
+analyzer after every message. It analyzes the tail after a size threshold, an
+idle period, an explicit request for fresh analysis, or a strong boundary. The
+API reports how far the analysis is current so the UI can distinguish fresh
+analysis from new queued conversation.
 
 #### Topic boundary detection
 
@@ -413,9 +414,11 @@ model = "gpt-5.4-mini"
 auto = true
 ```
 
-The exact model name is configuration, not a compiled enum. Once seeded, web
-settings stored in SQLite take precedence. A reanalysis request may override
-the model. Analysis provenance is stored on the session:
+The alternate shipped selection is `provider = "claude-cli"` with model
+`"haiku"`. Provider IDs are fixed; exact model names are configuration rather
+than a compiled enum. Once seeded, web settings stored in SQLite take
+precedence. A reanalysis request may override the model. Analysis provenance is
+stored on the session:
 
 ```text
 analysis_provider
@@ -425,8 +428,8 @@ analyzed_at
 analyzed_hash
 ```
 
-The transcript source agent and analysis provider are separate. For example, a
-Claude transcript may be summarized by `codex-cli`.
+The transcript source agent and analysis provider are separate. Either CLI may
+summarize a Codex or Claude transcript.
 
 Leaf-size, overlap, idle, boundary-confidence, and rollup-fanout values start as
 tested internal defaults rather than user-facing knobs. Promote one to a setting
