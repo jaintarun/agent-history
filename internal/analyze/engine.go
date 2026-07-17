@@ -38,7 +38,7 @@ func (e *Engine) Retitle(ctx context.Context, sessionID string, options Options)
 	}
 	analyzer, ok := e.analyzers[options.Provider]
 	if !ok {
-		return "", fmt.Errorf("analysis provider %q is not configured", options.Provider)
+		return "", fmt.Errorf("analysis provider %q is unavailable; install its CLI and restart Agent History", options.Provider)
 	}
 	detail, err := e.store.GetSession(ctx, sessionID)
 	if err != nil {
@@ -98,7 +98,7 @@ func (e *Engine) Analyze(ctx context.Context, sessionID string, options Options)
 	}
 	analyzer, ok := e.analyzers[options.Provider]
 	if !ok {
-		return Result{}, fmt.Errorf("analysis provider %q is not configured", options.Provider)
+		return Result{}, fmt.Errorf("analysis provider %q is unavailable; install its CLI and restart Agent History", options.Provider)
 	}
 	detail, err := e.store.GetSession(ctx, sessionID)
 	if err != nil {
