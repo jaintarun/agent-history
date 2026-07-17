@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/tarunjain/agent-history/internal/analyze"
+	"github.com/tarunjain/agent-history/internal/launch"
 	"github.com/tarunjain/agent-history/internal/source"
 	"github.com/tarunjain/agent-history/internal/store"
 )
@@ -447,7 +448,10 @@ func TestMutationEndpoints(t *testing.T) {
 		t.Fatalf("rescan response=%d scanner=%#v", response.Code, scanner)
 	}
 	response = serve(handler, jsonRequest(http.MethodPost, "/test-token/api/sessions/session-1/launch", `{"launcher":"copy"}`))
-	if response.Code != http.StatusOK || launcher.sessionID != "session-1" || launcher.mode != "copy" {
+	if response.Code != http.StatusOK ||
+		launcher.sessionID != "session-1" ||
+		launcher.mode != "copy" ||
+		launcher.permissions != launch.PermissionNormal {
 		t.Fatalf("launch response=%d launcher=%#v body=%s", response.Code, launcher, response.Body.String())
 	}
 
@@ -463,6 +467,30 @@ func TestMutationEndpoints(t *testing.T) {
 	}
 	if detail.Session.Title != "" || len(detail.Messages) != 2 {
 		t.Fatalf("detail after deletion = %#v", detail)
+	}
+}
+
+func TestLaunchPermissionModeIsValidated(t *testing.T) {
+	handler, _, _, _, launcher, _ := testHandler(t)
+
+	response := serve(handler, jsonRequest(
+		http.MethodPost,
+		"/test-token/api/sessions/session-1/launch",
+		`{"launcher":"auto","permissions":"bypass"}`,
+	))
+	if response.Code != http.StatusOK ||
+		launcher.permissions != launch.PermissionBypass ||
+		launcher.calls != 1 {
+		t.Fatalf("bypass response=%d launcher=%#v body=%s", response.Code, launcher, response.Body.String())
+	}
+
+	response = serve(handler, jsonRequest(
+		http.MethodPost,
+		"/test-token/api/sessions/session-1/launch",
+		`{"launcher":"auto","permissions":"--arbitrary"}`,
+	))
+	if response.Code != http.StatusBadRequest || launcher.calls != 1 {
+		t.Fatalf("invalid response=%d launcher=%#v body=%s", response.Code, launcher, response.Body.String())
 	}
 }
 
@@ -599,8 +627,10 @@ func (q *fakeQueue) enqueue(sessionID string, options analyze.Options, kind stri
 }
 
 type fakeLauncher struct {
-	sessionID string
-	mode      string
+	sessionID   string
+	mode        string
+	permissions string
+	calls       int
 }
 
 type fakeCmux struct {
@@ -624,8 +654,9 @@ func (c *fakeCmux) Status() store.CmuxStatus {
 	return c.status
 }
 
-func (l *fakeLauncher) Launch(_ context.Context, sessionID, mode string) (LaunchResult, error) {
-	l.sessionID, l.mode = sessionID, mode
+func (l *fakeLauncher) Launch(_ context.Context, sessionID, mode, permissions string) (LaunchResult, error) {
+	l.sessionID, l.mode, l.permissions = sessionID, mode, permissions
+	l.calls++
 	return LaunchResult{Mode: "copy", Command: "codex resume native-1"}, nil
 }
 

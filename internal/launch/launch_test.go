@@ -24,23 +24,47 @@ func TestCopyCommandsAreSafelyRendered(t *testing.T) {
 		t.Fatal(err)
 	}
 	tests := []struct {
-		agent string
-		id    string
-		want  string
+		name        string
+		agent       string
+		id          string
+		permissions string
+		want        string
 	}{
-		{agent: "codex", id: "11111111-1111-4111-8111-111111111111", want: "codex resume 11111111-1111-4111-8111-111111111111"},
-		{agent: "claude", id: "session:release.one", want: "claude --resume session:release.one"},
+		{
+			name: "codex normal", agent: "codex",
+			id:          "11111111-1111-4111-8111-111111111111",
+			permissions: PermissionNormal,
+			want:        "codex resume 11111111-1111-4111-8111-111111111111",
+		},
+		{
+			name: "codex bypass", agent: "codex",
+			id:          "11111111-1111-4111-8111-111111111111",
+			permissions: PermissionBypass,
+			want:        "codex resume --dangerously-bypass-approvals-and-sandbox 11111111-1111-4111-8111-111111111111",
+		},
+		{
+			name: "claude normal", agent: "claude", id: "session:release.one",
+			permissions: PermissionNormal,
+			want:        "claude --resume session:release.one",
+		},
+		{
+			name: "claude bypass", agent: "claude", id: "session:release.one",
+			permissions: PermissionBypass,
+			want:        "claude --dangerously-skip-permissions --resume session:release.one",
+		},
 	}
 	launcher := newWithRunner(database, &fakeRunner{lookPathErr: errors.New("missing")}, codex.New(t.TempDir()), claude.New(t.TempDir()))
 	for _, test := range tests {
-		sessionID := importLaunchSession(t, database, test.agent, test.id, cwd, "Title with 'quote'")
-		result, err := launcher.Launch(context.Background(), sessionID, "copy")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if result.Mode != "copy" || result.Command != test.want || result.Workspace != "" {
-			t.Errorf("%s copy result = %#v", test.agent, result)
-		}
+		t.Run(test.name, func(t *testing.T) {
+			sessionID := importLaunchSession(t, database, test.agent, test.id, cwd, "Title with 'quote'")
+			result, err := launcher.Launch(context.Background(), sessionID, "copy", test.permissions)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.Mode != "copy" || result.Command != test.want || result.Workspace != "" {
+				t.Fatalf("copy result = %#v", result)
+			}
+		})
 	}
 }
 
@@ -63,7 +87,7 @@ func TestAutoFallsBackWhenCmuxIsMissing(t *testing.T) {
 	cwd := t.TempDir()
 	sessionID := importLaunchSession(t, database, "codex", "safe-session", cwd, "Fallback")
 	launcher := newWithRunner(database, &fakeRunner{lookPathErr: errors.New("not found")}, codex.New(t.TempDir()))
-	result, err := launcher.Launch(context.Background(), sessionID, "auto")
+	result, err := launcher.Launch(context.Background(), sessionID, "auto", PermissionNormal)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,22 +102,42 @@ func TestCmuxLaunchUsesExactTrustedArgv(t *testing.T) {
 	if err := os.Mkdir(cwd, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	sessionID := importLaunchSession(t, database, "claude", "safe-session", cwd, "Fix user's retry")
-	runner := &fakeRunner{path: "/fake/cmux", output: "workspace:7\n"}
-	launcher := newWithRunner(database, runner, claude.New(t.TempDir()))
-	result, err := launcher.Launch(context.Background(), sessionID, "cmux")
-	if err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		name        string
+		agent       string
+		permissions string
+		command     string
+		adapter     source.Source
+	}{
+		{
+			name: "claude normal", agent: "claude", permissions: PermissionNormal,
+			command: "claude --resume safe-session", adapter: claude.New(t.TempDir()),
+		},
+		{
+			name: "codex bypass", agent: "codex", permissions: PermissionBypass,
+			command: "codex resume --dangerously-bypass-approvals-and-sandbox safe-session", adapter: codex.New(t.TempDir()),
+		},
 	}
-	want := []string{
-		"workspace", "create", "--name", "Fix user's retry", "--cwd", cwd,
-		"--command", "claude --resume safe-session", "--focus", "true",
-	}
-	if runner.executable != "/fake/cmux" || !reflect.DeepEqual(runner.args, want) {
-		t.Fatalf("cmux invocation = %q %q, want %q", runner.executable, runner.args, want)
-	}
-	if result.Mode != "cmux" || result.Workspace != "workspace:7" || result.Command != "" {
-		t.Fatalf("cmux result = %#v", result)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			sessionID := importLaunchSession(t, database, test.agent, "safe-session", cwd, "Fix user's retry")
+			runner := &fakeRunner{path: "/fake/cmux", output: "workspace:7\n"}
+			launcher := newWithRunner(database, runner, test.adapter)
+			result, err := launcher.Launch(context.Background(), sessionID, "cmux", test.permissions)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := []string{
+				"workspace", "create", "--name", "Fix user's retry", "--cwd", cwd,
+				"--command", test.command, "--focus", "true",
+			}
+			if runner.executable != "/fake/cmux" || !reflect.DeepEqual(runner.args, want) {
+				t.Fatalf("cmux invocation = %q %q, want %q", runner.executable, runner.args, want)
+			}
+			if result.Mode != "cmux" || result.Workspace != "workspace:7" || result.Command != "" {
+				t.Fatalf("cmux result = %#v", result)
+			}
+		})
 	}
 }
 
@@ -102,7 +146,7 @@ func TestCmuxFailureIsReturned(t *testing.T) {
 	sessionID := importLaunchSession(t, database, "codex", "safe-session", t.TempDir(), "Failure")
 	runner := &fakeRunner{path: "/fake/cmux", runErr: errors.New("socket unavailable")}
 	launcher := newWithRunner(database, runner, codex.New(t.TempDir()))
-	_, err := launcher.Launch(context.Background(), sessionID, "cmux")
+	_, err := launcher.Launch(context.Background(), sessionID, "cmux", PermissionNormal)
 	if err == nil || !strings.Contains(err.Error(), "socket unavailable") {
 		t.Fatalf("Launch error = %v", err)
 	}
@@ -122,7 +166,7 @@ func TestOSRunnerInvokesFakeCmuxExecutable(t *testing.T) {
 	t.Setenv("PATH", binDir)
 	t.Setenv("CMUX_ARGS_FILE", argsPath)
 	launcher := New(database, codex.New(t.TempDir()))
-	result, err := launcher.Launch(context.Background(), sessionID, "cmux")
+	result, err := launcher.Launch(context.Background(), sessionID, "cmux", PermissionNormal)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,13 +204,34 @@ func TestLauncherRejectsUntrustedSessionMetadata(t *testing.T) {
 	for index, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			sessionID := importLaunchSession(t, database, test.agent, test.id, test.cwd, fmt.Sprintf("Invalid %d", index))
-			if _, err := launcher.Launch(context.Background(), sessionID, "copy"); err == nil {
+			if _, err := launcher.Launch(context.Background(), sessionID, "copy", PermissionNormal); err == nil {
 				t.Fatal("Launch succeeded with untrusted metadata")
 			}
 		})
 	}
-	if _, err := launcher.Launch(context.Background(), "missing", "copy"); !errors.Is(err, store.ErrNotFound) {
+	if _, err := launcher.Launch(context.Background(), "missing", "copy", PermissionNormal); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("missing session error = %v", err)
+	}
+}
+
+func TestLauncherRejectsUnknownPermissionMode(t *testing.T) {
+	database := openLauncherStore(t)
+	sessionID := importLaunchSession(t, database, "codex", "safe-session", t.TempDir(), "Invalid mode")
+	launcher := newWithRunner(database, &fakeRunner{}, codex.New(t.TempDir()))
+	if _, err := launcher.Launch(context.Background(), sessionID, "copy", "custom-flag"); err == nil {
+		t.Fatal("Launch accepted an unknown permission mode")
+	}
+}
+
+func TestPermissionArgsDoesNotMutateNormalSpec(t *testing.T) {
+	normal := []string{"resume", "safe-session"}
+	got := permissionArgs("codex", normal, PermissionBypass)
+	if !reflect.DeepEqual(normal, []string{"resume", "safe-session"}) {
+		t.Fatalf("normal args mutated: %q", normal)
+	}
+	want := []string{"resume", "--dangerously-bypass-approvals-and-sandbox", "safe-session"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("bypass args = %q, want %q", got, want)
 	}
 }
 

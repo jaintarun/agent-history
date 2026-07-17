@@ -18,6 +18,11 @@ import (
 var safeSessionID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$`)
 var safeShellWord = regexp.MustCompile(`^[A-Za-z0-9_@%+=:,./-]+$`)
 
+const (
+	PermissionNormal = "normal"
+	PermissionBypass = "bypass"
+)
+
 // Result describes either a cmux launch or a command the user must copy.
 type Result struct {
 	Mode      string `json:"mode"`
@@ -50,10 +55,13 @@ func newWithRunner(database *store.Store, commandRunner runner, sources ...sourc
 	return &Launcher{store: database, sources: configured, runner: commandRunner}
 }
 
-// Launch resumes sessionID using mode auto, cmux, or copy.
-func (l *Launcher) Launch(ctx context.Context, sessionID, mode string) (Result, error) {
+// Launch resumes sessionID using a trusted launcher and permission mode.
+func (l *Launcher) Launch(ctx context.Context, sessionID, mode, permissions string) (Result, error) {
 	if mode != "auto" && mode != "cmux" && mode != "copy" {
 		return Result{}, fmt.Errorf("unsupported launcher mode %q", mode)
+	}
+	if permissions != PermissionNormal && permissions != PermissionBypass {
+		return Result{}, fmt.Errorf("unsupported permission mode %q", permissions)
 	}
 	detail, err := l.store.GetSession(ctx, sessionID)
 	if err != nil {
@@ -70,7 +78,7 @@ func (l *Launcher) Launch(ctx context.Context, sessionID, mode string) (Result, 
 	if err := validateSpec(detail.Session, spec); err != nil {
 		return Result{}, err
 	}
-	command := renderCommand(spec.Executable, spec.Args)
+	command := renderCommand(spec.Executable, permissionArgs(detail.Session.Agent, spec.Args, permissions))
 	if mode == "copy" {
 		return Result{Mode: "copy", Command: command}, nil
 	}
@@ -88,6 +96,22 @@ func (l *Launcher) Launch(ctx context.Context, sessionID, mode string) (Result, 
 		return Result{}, fmt.Errorf("launch cmux workspace: %w", err)
 	}
 	return Result{Mode: "cmux", Workspace: strings.TrimSpace(string(output))}, nil
+}
+
+func permissionArgs(agent string, normal []string, permissions string) []string {
+	args := append([]string(nil), normal...)
+	if permissions == PermissionNormal {
+		return args
+	}
+	switch agent {
+	case "codex":
+		args = append(args, "")
+		copy(args[2:], args[1:])
+		args[1] = "--dangerously-bypass-approvals-and-sandbox"
+	case "claude":
+		args = append([]string{"--dangerously-skip-permissions"}, args...)
+	}
+	return args
 }
 
 func validateSpec(session store.Session, spec source.ResumeSpec) error {

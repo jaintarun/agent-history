@@ -44,7 +44,7 @@ type AnalysisQueue interface {
 
 // Launcher is the trusted session-launch boundary.
 type Launcher interface {
-	Launch(context.Context, string, string) (LaunchResult, error)
+	Launch(context.Context, string, string, string) (LaunchResult, error)
 }
 
 // Cmux controls live cmux reconciliation and explicit title writes.
@@ -475,7 +475,8 @@ func (h *handler) launch(response http.ResponseWriter, request *http.Request) {
 		return
 	}
 	var body struct {
-		Launcher string `json:"launcher"`
+		Launcher    string `json:"launcher"`
+		Permissions string `json:"permissions"`
 	}
 	if err := decodeJSONBody(response, request, &body); err != nil {
 		writeError(response, http.StatusBadRequest, "invalid_json", err.Error())
@@ -484,11 +485,18 @@ func (h *handler) launch(response http.ResponseWriter, request *http.Request) {
 	if body.Launcher == "" {
 		body.Launcher = "auto"
 	}
+	if body.Permissions == "" {
+		body.Permissions = launch.PermissionNormal
+	}
 	if body.Launcher != "auto" && body.Launcher != "cmux" && body.Launcher != "copy" {
 		writeError(response, http.StatusBadRequest, "invalid_launcher", "launcher must be auto, cmux, or copy")
 		return
 	}
-	result, err := h.launcher.Launch(request.Context(), request.PathValue("id"), body.Launcher)
+	if body.Permissions != launch.PermissionNormal && body.Permissions != launch.PermissionBypass {
+		writeError(response, http.StatusBadRequest, "invalid_permissions", "permissions must be normal or bypass")
+		return
+	}
+	result, err := h.launcher.Launch(request.Context(), request.PathValue("id"), body.Launcher, body.Permissions)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			writeError(response, http.StatusNotFound, "not_found", "session not found")
