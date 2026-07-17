@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -90,6 +91,43 @@ func TestSearchKeywordsExcludeWorkingDirectoryColumn(t *testing.T) {
 	assertSearchQueryIDs(t, database, SearchQuery{Text: "work search"}, nil)
 	assertSearchQueryIDs(t, database, SearchQuery{Text: "work search", IncludeMessages: true}, nil)
 	assertSearchQueryIDs(t, database, SearchQuery{CWD: "work/search"}, []string{"s2"})
+}
+
+func TestSearchFTSQueryPlanDoesNotRescanMessagesPerHit(t *testing.T) {
+	database := searchFixture(t)
+	rows, err := database.db.Query(
+		"EXPLAIN QUERY PLAN "+textMatchesQuery,
+		`{title body} : ("ledger"*)`,
+		false,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(detail, "search_message") {
+			t.Fatalf("FTS query plan rescans messages for each hit: %s", detail)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSearchMalformedMessageKeyCannotQualifyAsUnsummarizedTail(t *testing.T) {
+	database := searchFixture(t)
+	if _, err := database.db.Exec(`
+        INSERT INTO session_fts(session_id, document_key, document_type, title, body, working_directory)
+        VALUES ('s1', 'message:2junk', 'message', '', 'malformed tail sentinel', '/work/payments')`); err != nil {
+		t.Fatal(err)
+	}
+	assertSearchQueryIDs(t, database, SearchQuery{Text: "malformed tail sentinel"}, nil)
+	assertSearchQueryIDs(t, database, SearchQuery{Text: "malformed tail sentinel", IncludeMessages: true}, []string{"s1"})
 }
 
 func TestSearchWeightsGeneratedTitlesAboveRawMessages(t *testing.T) {

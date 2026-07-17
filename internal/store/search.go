@@ -147,10 +147,36 @@ const searchDocumentEligibility = `(
         AND (
             ? = 1
             OR sessions.analysis_provider IS NULL
-            OR search_message.sequence > sessions.analyzed_through_sequence
+            OR (
+                session_fts.document_key = printf(
+                    'message:%d',
+                    CAST(substr(session_fts.document_key, 9) AS INTEGER)
+                )
+                AND CAST(substr(session_fts.document_key, 9) AS INTEGER)
+                    > sessions.analyzed_through_sequence
+            )
         )
     )
 )`
+
+const textMatchesQuery = `
+    SELECT session_fts.session_id,
+           coalesce(nullif(snippet(session_fts, 4, '', '', '...', 18), ''), session_fts.title, ''),
+           bm25(session_fts, 0.0, 0.0, 0.0, 10.0, 3.0, 0.0) AS score
+    FROM session_fts
+    JOIN sessions ON sessions.id = session_fts.session_id
+    WHERE session_fts MATCH ?
+      AND ` + searchDocumentEligibility + `
+    ORDER BY score`
+
+const literalMatchesQuery = `
+    SELECT session_fts.session_id,
+           substr(coalesce(nullif(session_fts.body, ''), session_fts.title, ''), 1, 240)
+    FROM session_fts
+    JOIN sessions ON sessions.id = session_fts.session_id
+    WHERE lower(session_fts.title || char(10) || session_fts.body)
+          LIKE lower(?) ESCAPE '\'
+      AND ` + searchDocumentEligibility
 
 func (s *Store) textMatches(ctx context.Context, text string, includeMessages bool) (map[string]textMatch, error) {
 	matchQuery := safeFTSQuery(text)
@@ -158,19 +184,7 @@ func (s *Store) textMatches(ctx context.Context, text string, includeMessages bo
 		return s.literalMatches(ctx, text, includeMessages)
 	}
 	matchQuery = "{title body} : (" + matchQuery + ")"
-	rows, err := s.db.QueryContext(ctx, `
-        SELECT session_fts.session_id,
-               coalesce(nullif(snippet(session_fts, 4, '', '', '...', 18), ''), session_fts.title, ''),
-               bm25(session_fts, 0.0, 0.0, 0.0, 10.0, 3.0, 0.0) AS score
-        FROM session_fts
-        JOIN sessions ON sessions.id = session_fts.session_id
-        LEFT JOIN messages AS search_message
-          ON session_fts.document_type = 'message'
-         AND search_message.session_id = session_fts.session_id
-         AND session_fts.document_key = printf('message:%d', search_message.sequence)
-        WHERE session_fts MATCH ?
-          AND `+searchDocumentEligibility+`
-        ORDER BY score`, matchQuery, includeMessages)
+	rows, err := s.db.QueryContext(ctx, textMatchesQuery, matchQuery, includeMessages)
 	if err != nil {
 		return s.literalMatches(ctx, text, includeMessages)
 	}
@@ -194,18 +208,7 @@ func (s *Store) textMatches(ctx context.Context, text string, includeMessages bo
 
 func (s *Store) literalMatches(ctx context.Context, text string, includeMessages bool) (map[string]textMatch, error) {
 	pattern := "%" + escapeLike(strings.TrimSpace(text)) + "%"
-	rows, err := s.db.QueryContext(ctx, `
-        SELECT session_fts.session_id,
-               substr(coalesce(nullif(session_fts.body, ''), session_fts.title, ''), 1, 240)
-        FROM session_fts
-        JOIN sessions ON sessions.id = session_fts.session_id
-        LEFT JOIN messages AS search_message
-          ON session_fts.document_type = 'message'
-         AND search_message.session_id = session_fts.session_id
-         AND session_fts.document_key = printf('message:%d', search_message.sequence)
-        WHERE lower(session_fts.title || char(10) || session_fts.body)
-              LIKE lower(?) ESCAPE '\'
-          AND `+searchDocumentEligibility, pattern, includeMessages)
+	rows, err := s.db.QueryContext(ctx, literalMatchesQuery, pattern, includeMessages)
 	if err != nil {
 		return nil, fmt.Errorf("query literal matches: %w", err)
 	}
