@@ -138,8 +138,11 @@ intentionally invalidates the applicable summary cache.
 
 The embedded UI supports:
 
-- full-text search over summaries, topics, visible messages, retained tool
-  facts, errors, filenames, and working directories;
+- focused full-text search over generated titles, summaries, and topics, with
+  automatic normalized-message fallback for unanalyzed sessions and new
+  unsummarized activity;
+- an **Include full conversations** option that also searches all normalized
+  visible messages and retained tool facts;
 - agent, last-active preset, exact active/started range, folder, topic-count,
   analysis-state, and open-in-cmux filters;
 - stable cursor pagination and last-active, started, or title sorting;
@@ -149,6 +152,12 @@ The embedded UI supports:
   Scan, Settings, Resume normally, and an agent-specific permission-bypass
   resume action; and
 - keyboard result navigation and a responsive narrow layout.
+
+Search terms use AND semantics within one eligible summary, topic, or message.
+Working directories use the dedicated folder filter instead of keyword search.
+API clients can opt into all normalized messages with
+`GET /api/sessions?q=...&include_messages=true`; omission or `false` uses focused
+search.
 
 Delete analysis preserves imported messages. Resume uses only validated stored
 metadata. Codex sessions show **Resume normally** and **Resume with YOLO**;

@@ -529,8 +529,12 @@ or a later operating-system credential store.
 
 FTS documents cover generated titles and summaries, topic text, visible
 messages, retained tool activity, and working directories. Results are grouped
-by session. Ranking weights generated titles and topic titles above raw message
-content.
+by session. Default keyword search admits generated session and topic documents,
+all normalized messages for sessions without stored analysis, and only messages
+after the analyzed-through position for partial sessions. An explicit
+`include_messages=true` scope admits every normalized message. Working
+directories remain materialized for rebuild compatibility but are queried
+through the dedicated folder filter rather than keyword matching.
 
 ### Search and filters
 
@@ -538,6 +542,7 @@ The supported query parameters are:
 
 ```text
 q
+include_messages      true includes every normalized message; false or absent is focused
 agent
 active_after
 active_before
@@ -552,8 +557,10 @@ limit
 ```
 
 The UI supplies presets for 7 days, 30 days, 3 months, 6 months, 1 year, and all
-time. A facets response supplies agent counts, common working directories,
-analysis-state counts, and the available date range.
+time. **Include full conversations** controls the explicit message scope and is
+stored in the URL, not application settings. A facets response supplies agent
+counts, common working directories, analysis-state counts, and the available
+date range.
 
 ### Web API
 
@@ -586,6 +593,7 @@ The web application uses plain HTML, CSS, and browser JavaScript embedded with
 still supporting:
 
 - URL-backed search and filter state;
+- focused hierarchy search with an explicit full-conversation checkbox;
 - paginated result loading;
 - one-minute in-place data refresh with a manual countdown control that
   preserves current filters and selection;

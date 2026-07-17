@@ -252,7 +252,12 @@ does not reanalyze sealed history.
   - retained tool activity;
   - working directory.
 - Implement safe token/prefix FTS queries and literal fallback behavior.
-- Group document hits by session and retain the best snippet.
+- Default to generated session/topic documents, with normalized-message
+  fallback for sessions without stored analysis and messages after the
+  analyzed-through position.
+- Support an explicit full-conversation scope that admits every normalized
+  message while keeping working-directory matching in the dedicated filter.
+- Group eligible document hits by session and retain the best snippet.
 - Weight title/topic matches above raw transcript matches.
 - Implement filters:
   - agent;
@@ -270,6 +275,9 @@ does not reanalyze sealed history.
 
 - Search integration tests cover exact error text, filenames, generated
   concepts, Unicode, punctuation, and empty queries.
+- Focused-scope tests cover analyzed transcript exclusion, unanalyzed-session
+  fallback, unsummarized tails, stored analysis provenance, and explicit full
+  conversation search in both tokenized and literal paths.
 - Combined filters produce the expected session IDs.
 - Pagination has no duplicates or omissions for identical timestamps.
 - Deleted analysis disappears from summary search while message search remains.
@@ -295,7 +303,8 @@ handlers or UI are added.
   - JSON content-type and body-size limits;
   - panic recovery.
 - Implement endpoints from the design document.
-- Validate all identifiers, date filters, limits, sort values, and settings.
+- Validate all identifiers, date filters, booleans, limits, sort values, and
+  settings.
 - Return consistent error objects.
 - Recover stale analysis states at startup.
 - Open the default browser on macOS unless `--no-open` is set.
@@ -323,6 +332,7 @@ Every frontend workflow can be completed with HTTP requests alone.
 - Keep query and filter state in the URL.
 - Add:
   - debounced full-text search;
+  - a URL-backed **Include full conversations** checkbox;
   - agent/date/folder/topic/status filters;
   - active filter chips and clear-all;
   - cursor-based result loading;
@@ -350,6 +360,7 @@ Every frontend workflow can be completed with HTTP requests alone.
   - hundreds of result rows;
   - long titles, paths, and summaries;
   - combined filters;
+  - focused/full-conversation scope across reload, refresh, and pagination;
   - topic expansion;
   - successful and failed reanalysis;
   - destructive confirmation;

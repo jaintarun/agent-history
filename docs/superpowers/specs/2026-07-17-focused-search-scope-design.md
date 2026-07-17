@@ -1,7 +1,7 @@
 # Focused Search Scope Design
 
 **Date:** 2026-07-17
-**Status:** Design approved; pending written-spec review
+**Status:** Implemented
 
 ## Purpose
 
