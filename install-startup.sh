@@ -68,11 +68,6 @@ loaded=false
 if launchctl print "$service" >/dev/null 2>&1; then
   loaded=true
 fi
-if [ -f "$plist_path" ] && cmp -s "$tmp_plist" "$plist_path" && [ "$loaded" = true ] && curl -fsS http://127.0.0.1:54321/api/health >/dev/null 2>&1; then
-  printf 'Agent History startup is already installed and running.\n%s\n' "http://127.0.0.1:54321/"
-  exit 0
-fi
-
 if [ "$loaded" = true ]; then
   launchctl bootout "$service"
   attempts=0

@@ -115,8 +115,8 @@ exit 1
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := countLaunchctlCommand(string(logData), "bootstrap "); got != 2 {
-		t.Fatalf("bootstrap attempt count = %d, want 2; log:\n%s", got, logData)
+	if got := countLaunchctlCommand(string(logData), "bootstrap "); got != 3 {
+		t.Fatalf("bootstrap attempt count = %d, want 3; log:\n%s", got, logData)
 	}
 
 	runStartupScript(t, uninstallScript, environment)
@@ -131,8 +131,8 @@ exit 1
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := countLaunchctlCommand(string(logData), "bootout "); got != 2 {
-		t.Fatalf("bootout count = %d, want 2; log:\n%s", got, logData)
+	if got := countLaunchctlCommand(string(logData), "bootout "); got != 3 {
+		t.Fatalf("bootout count = %d, want 3; log:\n%s", got, logData)
 	}
 }
 
