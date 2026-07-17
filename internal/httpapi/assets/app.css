@@ -87,6 +87,15 @@ h3 { margin-bottom: 5px; font-size: 14px; line-height: 1.4; }
 .detail-title { margin-bottom: 7px; font-size: 22px; overflow-wrap: anywhere; }
 .detail-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; flex: none; }
 .detail-actions .danger { color: var(--red); }
+.detail-actions .resume-bypass {
+  max-width: 220px;
+  min-height: 34px;
+  height: auto;
+  padding-top: 7px;
+  padding-bottom: 7px;
+  line-height: 1.25;
+  white-space: normal;
+}
 .metadata-grid { margin-top: 12px; display: grid; grid-template-columns: repeat(4, minmax(110px, 1fr)); gap: 12px; }
 .metadata-item { min-width: 0; }
 .metadata-label { display: block; margin-bottom: 2px; color: var(--text-muted); font-size: 11px; text-transform: uppercase; }

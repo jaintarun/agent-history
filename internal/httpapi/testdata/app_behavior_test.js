@@ -170,6 +170,17 @@ function textOf(node) {
   return node.textContent + node.children.map((child) => textOf(child)).join("");
 }
 
+function childByText(parent, text) {
+  return parent.children.find((child) => textOf(child) === text);
+}
+
+async function clickNode(node) {
+  const event = { currentTarget: node, target: node, preventDefault() {} };
+  const results = (node.listeners.get("click") || []).map((listener) => listener(event));
+  await Promise.all(results);
+  await settle();
+}
+
 function session(id, analysisStatus) {
   return {
     id,
@@ -294,11 +305,54 @@ async function testStaleSelections() {
   assert.equal(pollTimers(environment).length, 1, "stale failure canceled selected polling");
 }
 
+async function testResumePermissionActions() {
+  const environment = createEnvironment("off");
+  await settle();
+  environment.requests.length = 0;
+  environment.fetchHandler = (url) => {
+    const path = String(url).replace("/test-token/api", "");
+    if (path.endsWith("/launch")) {
+      return Promise.resolve(fakeResponse({ mode: "copy", command: "resume command" }));
+    }
+    throw new Error(`unexpected fetch ${path}`);
+  };
+
+  for (const test of [
+    {
+      agent: "codex",
+      bypassLabel: "Resume with YOLO",
+      absentLabel: "Resume with dangerously skipped permissions"
+    },
+    {
+      agent: "claude",
+      bypassLabel: "Resume with dangerously skipped permissions",
+      absentLabel: "Resume with YOLO"
+    }
+  ]) {
+    const sourceSession = { ...session("resume", "current"), agent: test.agent };
+    const actions = evaluate(environment, `actionButtons(${JSON.stringify(sourceSession)})`);
+    const normal = childByText(actions, "Resume normally");
+    const bypass = childByText(actions, test.bypassLabel);
+    assert.ok(normal, `${test.agent} normal resume missing`);
+    assert.ok(bypass, `${test.agent} bypass resume missing`);
+    assert.equal(childByText(actions, test.absentLabel), undefined);
+
+    await clickNode(normal);
+    await clickNode(bypass);
+    const recent = environment.requests.slice(-2).map((request) => JSON.parse(request.options.body));
+    assert.deepEqual(recent, [
+      { launcher: "auto", permissions: "normal" },
+      { launcher: "auto", permissions: "bypass" }
+    ]);
+  }
+}
+
 async function main() {
   await testStoredPreferences();
   await testDisableAndReenable();
   await testDisabledManualRefreshAndPollSuppression();
   await testStaleSelections();
+  await testResumePermissionActions();
   process.stdout.write("browser behavior assertions passed\n");
 }
 

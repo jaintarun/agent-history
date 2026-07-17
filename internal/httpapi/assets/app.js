@@ -390,12 +390,21 @@ function actionButtons(session) {
   const rescan = element("button", "", "Rescan");
   rescan.type = "button";
   rescan.addEventListener("click", () => mutateSession(session.id, "/rescan", "POST", {}, "Session rescanned"));
-  const resume = element("button", "", "Resume");
-  resume.type = "button";
-  resume.addEventListener("click", () => resumeSession(session.id));
   actions.append(analyze);
   if (session.topics?.length) actions.append(retitle);
-  actions.append(rescan, resume);
+  actions.append(rescan);
+  if (session.agent === "codex" || session.agent === "claude") {
+    const resume = element("button", "", "Resume normally");
+    resume.type = "button";
+    resume.addEventListener("click", () => resumeSession(session.id, "normal"));
+    const bypassLabel = session.agent === "codex"
+      ? "Resume with YOLO"
+      : "Resume with dangerously skipped permissions";
+    const bypass = element("button", "resume-bypass", bypassLabel);
+    bypass.type = "button";
+    bypass.addEventListener("click", () => resumeSession(session.id, "bypass"));
+    actions.append(resume, bypass);
+  }
   if (session.analysis_status !== "none" || session.title) {
     const remove = element("button", "danger", "Delete analysis");
     remove.type = "button";
@@ -455,9 +464,12 @@ async function mutateSession(id, suffix, method, body, success) {
   } catch (error) { toast(error.message, true); }
 }
 
-async function resumeSession(id) {
+async function resumeSession(id, permissions) {
   try {
-    const result = await request("/sessions/" + encodeURIComponent(id) + "/launch", { method: "POST", body: JSON.stringify({ launcher: "auto" }) });
+    const result = await request("/sessions/" + encodeURIComponent(id) + "/launch", {
+      method: "POST",
+      body: JSON.stringify({ launcher: "auto", permissions })
+    });
     if (result.command) showCommand(result.command);
     else toast("Session launched in " + (result.workspace || "cmux"));
   } catch (error) { toast(error.message, true); }
