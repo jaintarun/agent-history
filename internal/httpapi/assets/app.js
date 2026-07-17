@@ -17,7 +17,8 @@ function saveAutoRefreshPreference(enabled) {
 const state = {
   sessions: [], nextCursor: "", selectedID: "", searchAbort: null,
   pollTimer: null, cmuxStatus: null,
-  autoRefresh: loadAutoRefreshPreference(), selectedAnalysisStatus: ""
+  autoRefresh: loadAutoRefreshPreference(), selectedAnalysisStatus: "",
+  settingsProvider: "", settingsProviders: []
 };
 const refreshIntervalSeconds = 60;
 let refreshSeconds = refreshIntervalSeconds;
@@ -520,10 +521,40 @@ async function loadCmuxStatus() {
   return settings;
 }
 
+function settingsProvider(id) {
+  return state.settingsProviders.find((provider) => provider.id === id);
+}
+
+function updateSettingsProviderStatus() {
+  const provider = settingsProvider(elements["settings-provider"].value);
+  if (!provider) {
+    elements["settings-provider-status"].textContent = "";
+    return;
+  }
+  elements["settings-provider-status"].textContent = provider.available
+    ? `Uses existing ${provider.name} CLI authentication.`
+    : `Install ${provider.name}, then restart Agent History.`;
+}
+
+function renderSettingsProviders(settings) {
+  state.settingsProviders = settings.analysis_providers || [];
+  state.settingsProvider = settings.analysis_provider;
+  elements["settings-provider"].replaceChildren();
+  for (const provider of state.settingsProviders) {
+    const option = document.createElement("option");
+    option.value = provider.id;
+    option.textContent = provider.name + (provider.available ? "" : " (Not installed)");
+    option.disabled = !provider.available && provider.id !== settings.analysis_provider;
+    elements["settings-provider"].append(option);
+  }
+  elements["settings-provider"].value = settings.analysis_provider;
+  updateSettingsProviderStatus();
+}
+
 async function openSettings() {
   try {
     const settings = await loadCmuxStatus();
-    elements["settings-provider"].value = settings.analysis_provider;
+    renderSettingsProviders(settings);
     elements["settings-model"].value = settings.analysis_model;
     elements["settings-auto"].checked = settings.analysis_auto;
     elements["settings-cmux-sync"].checked = settings.cmux_title_sync;
@@ -622,6 +653,16 @@ elements["retitle-weak-button"].addEventListener("click", async () => {
 });
 elements["settings-button"].addEventListener("click", openSettings);
 elements["settings-cancel"].addEventListener("click", () => elements["settings-dialog"].close());
+elements["settings-provider"].addEventListener("change", () => {
+  const previous = settingsProvider(state.settingsProvider);
+  const selected = settingsProvider(elements["settings-provider"].value);
+  const model = elements["settings-model"].value.trim();
+  if (selected && (!model || (previous && model === previous.default_model))) {
+    elements["settings-model"].value = selected.default_model;
+  }
+  state.settingsProvider = elements["settings-provider"].value;
+  updateSettingsProviderStatus();
+});
 elements["settings-form"].addEventListener("submit", async (event) => {
   event.preventDefault();
   try {

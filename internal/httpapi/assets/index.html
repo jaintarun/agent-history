@@ -145,7 +145,8 @@
   <dialog id="settings-dialog">
     <form id="settings-form">
       <h2>Settings</h2>
-      <label>Provider<input id="settings-provider" type="text" readonly></label>
+      <label>Provider<select id="settings-provider" required></select></label>
+      <p id="settings-provider-status" class="muted" role="status"></p>
       <label>Model<input id="settings-model" type="text" required maxlength="200"></label>
       <label class="check-row"><input id="settings-auto" type="checkbox"> Requeue interrupted analysis at startup</label>
       <label class="check-row"><input id="settings-cmux-sync" type="checkbox"> Automatically sync titles to cmux</label>
@@ -159,6 +160,6 @@
   </dialog>
 
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
-  <script src="assets/app.js?v=3"></script>
+  <script src="assets/app.js?v=4"></script>
 </body>
 </html>

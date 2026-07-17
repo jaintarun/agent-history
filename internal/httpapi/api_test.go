@@ -77,9 +77,9 @@ func TestEmbeddedWebApplication(t *testing.T) {
 		contains    string
 		cache       string
 	}{
-		{path: "/test-token/", contentType: "text/html", contains: `assets/app.js?v=3`, cache: "no-store"},
-		{path: "/test-token/assets/app.css?v=3", contentType: "text/css", contains: ":root", cache: "no-store"},
-		{path: "/test-token/assets/app.js?v=3", contentType: "text/javascript", contains: "fetch(", cache: "no-store"},
+		{path: "/test-token/", contentType: "text/html", contains: `assets/app.js?v=4`, cache: "no-store"},
+		{path: "/test-token/assets/app.css?v=4", contentType: "text/css", contains: ":root", cache: "no-store"},
+		{path: "/test-token/assets/app.js?v=4", contentType: "text/javascript", contains: "fetch(", cache: "no-store"},
 	}
 	for _, test := range tests {
 		response := serve(handler, apiRequest(http.MethodGet, test.path, nil))

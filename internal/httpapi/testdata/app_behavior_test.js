@@ -15,7 +15,8 @@ const elementIDs = [
   "filter-chips", "results-heading", "results-status", "session-results", "load-more", "detail-pane",
   "detail-empty", "detail-content", "confirm-dialog", "confirm-delete", "command-dialog", "resume-command",
   "copy-status", "copy-command", "settings-dialog", "settings-form", "settings-provider", "settings-model",
-  "settings-auto", "settings-cmux-sync", "settings-cmux-status", "settings-error", "settings-cancel", "toast"
+  "settings-provider-status", "settings-auto", "settings-cmux-sync", "settings-cmux-status", "settings-error",
+  "settings-cancel", "toast"
 ];
 
 class FakeNode {
@@ -71,6 +72,7 @@ function createEnvironment(storedPreference, search = "") {
   for (const id of ["agent-filter", "active-filter", "cmux-filter", "topic-filter", "status-filter", "sort-filter"]) {
     nodes[id].tagName = "SELECT";
   }
+  nodes["settings-provider"].tagName = "SELECT";
   const storage = new Map();
   if (storedPreference !== undefined) storage.set("agent-history.auto-refresh", storedPreference);
   const timeouts = new Map();
@@ -92,6 +94,10 @@ function createEnvironment(storedPreference, search = "") {
       if (path === "/settings") {
         return Promise.resolve(fakeResponse({
           analysis_provider: "codex-cli", analysis_model: "test", analysis_auto: false,
+          analysis_providers: [
+            { id: "codex-cli", name: "Codex", default_model: "gpt-5.4-mini", available: true },
+            { id: "claude-cli", name: "Claude Code", default_model: "haiku", available: false }
+          ],
           cmux_title_sync: false, cmux_available: true, cmux_access_mode: "allowAll",
           cmux_error: "", cmux_observed_at: ""
         }));
@@ -382,6 +388,40 @@ async function testSearchScopeControl() {
   ));
 }
 
+async function testAnalysisProviderSettings() {
+  const environment = createEnvironment("off");
+  await settle();
+  await dispatch(environment, "settings-button", "click");
+
+  const provider = environment.nodes["settings-provider"];
+  assert.equal(provider.children.length, 2);
+  assert.equal(provider.children[0].value, "codex-cli");
+  assert.equal(textOf(provider.children[0]), "Codex");
+  assert.equal(provider.children[1].value, "claude-cli");
+  assert.equal(textOf(provider.children[1]), "Claude Code (Not installed)");
+  assert.equal(provider.children[1].disabled, true);
+
+  environment.nodes["settings-model"].value = "gpt-5.4-mini";
+  provider.value = "claude-cli";
+  await dispatch(environment, "settings-provider", "change");
+  assert.equal(environment.nodes["settings-model"].value, "haiku");
+
+  environment.nodes["settings-model"].value = "custom-model";
+  provider.value = "codex-cli";
+  await dispatch(environment, "settings-provider", "change");
+  assert.equal(environment.nodes["settings-model"].value, "custom-model");
+
+  environment.requests.length = 0;
+  await dispatch(environment, "settings-form", "submit");
+  const update = environment.requests.find((request) =>
+    request.url.endsWith("/settings") && request.options.method === "PUT"
+  );
+  assert.ok(update, "settings update request missing");
+  const body = JSON.parse(update.options.body);
+  assert.equal(body.analysis_provider, "codex-cli");
+  assert.equal(body.analysis_model, "custom-model");
+}
+
 async function main() {
   await testStoredPreferences();
   await testDisableAndReenable();
@@ -389,6 +429,7 @@ async function main() {
   await testStaleSelections();
   await testResumePermissionActions();
   await testSearchScopeControl();
+  await testAnalysisProviderSettings();
   process.stdout.write("browser behavior assertions passed\n");
 }
 
