@@ -808,6 +808,15 @@ func parseSearchQuery(values url.Values) (store.SearchQuery, error) {
 		TopicMode: values.Get("topic_mode"), AnalysisStatus: values.Get("analysis_status"),
 		Cmux: values.Get("cmux"), Sort: values.Get("sort"), Cursor: values.Get("cursor"),
 	}
+	if values.Has("include_messages") {
+		switch values.Get("include_messages") {
+		case "true":
+			query.IncludeMessages = true
+		case "false":
+		default:
+			return store.SearchQuery{}, errors.New("include_messages must be true or false")
+		}
+	}
 	for key, destination := range map[string]**time.Time{
 		"active_after": &query.ActiveAfter, "active_before": &query.ActiveBefore,
 		"started_after": &query.StartedAfter, "started_before": &query.StartedBefore,

@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -246,6 +247,39 @@ func TestSessionDetailActionsWrapAtIntermediateWidths(t *testing.T) {
 	}
 }
 
+func TestParseSearchQueryIncludeMessages(t *testing.T) {
+	tests := []struct {
+		name    string
+		values  url.Values
+		want    bool
+		wantErr bool
+	}{
+		{name: "absent", values: url.Values{}},
+		{name: "true", values: url.Values{"include_messages": {"true"}}, want: true},
+		{name: "false", values: url.Values{"include_messages": {"false"}}},
+		{name: "empty", values: url.Values{"include_messages": {""}}, wantErr: true},
+		{name: "numeric", values: url.Values{"include_messages": {"1"}}, wantErr: true},
+		{name: "mixed case", values: url.Values{"include_messages": {"TRUE"}}, wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			query, err := parseSearchQuery(test.values)
+			if test.wantErr {
+				if err == nil {
+					t.Fatal("parseSearchQuery succeeded, want error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if query.IncludeMessages != test.want {
+				t.Fatalf("IncludeMessages = %v, want %v", query.IncludeMessages, test.want)
+			}
+		})
+	}
+}
+
 func TestSessionReadEndpoints(t *testing.T) {
 	handler, _, _, _, _, _ := testHandler(t)
 
@@ -262,6 +296,33 @@ func TestSessionReadEndpoints(t *testing.T) {
 	decodeResponse(t, response, &search)
 	if len(search.Sessions) != 1 || search.Sessions[0].ID != "session-1" || search.Sessions[0].Agent != "codex" {
 		t.Fatalf("search response = %#v", search)
+	}
+
+	response = serve(handler, apiRequest(http.MethodGet,
+		"/test-token/api/sessions?q=sensitive+transcript+phrase", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("focused transcript search status = %d body=%s", response.Code, response.Body.String())
+	}
+	decodeResponse(t, response, &search)
+	if len(search.Sessions) != 0 {
+		t.Fatalf("focused transcript search response = %#v", search)
+	}
+
+	response = serve(handler, apiRequest(http.MethodGet,
+		"/test-token/api/sessions?q=sensitive+transcript+phrase&include_messages=true", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("full transcript search status = %d body=%s", response.Code, response.Body.String())
+	}
+	decodeResponse(t, response, &search)
+	if len(search.Sessions) != 1 || search.Sessions[0].ID != "session-1" {
+		t.Fatalf("full transcript search response = %#v", search)
+	}
+
+	response = serve(handler, apiRequest(http.MethodGet,
+		"/test-token/api/sessions?include_messages=1", nil))
+	if response.Code != http.StatusBadRequest ||
+		!strings.Contains(response.Body.String(), `"code":"invalid_query"`) {
+		t.Fatalf("invalid include_messages response = %d %s", response.Code, response.Body.String())
 	}
 
 	response = serve(handler, apiRequest(http.MethodGet, "/test-token/api/sessions/session-1", nil))
