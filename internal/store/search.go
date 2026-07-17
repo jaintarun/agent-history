@@ -15,19 +15,20 @@ import (
 
 // SearchQuery contains composable session retrieval filters.
 type SearchQuery struct {
-	Text           string
-	Agent          string
-	ActiveAfter    *time.Time
-	ActiveBefore   *time.Time
-	StartedAfter   *time.Time
-	StartedBefore  *time.Time
-	CWD            string
-	TopicMode      string
-	AnalysisStatus string
-	Cmux           string
-	Sort           string
-	Cursor         string
-	Limit          int
+	Text            string
+	IncludeMessages bool
+	Agent           string
+	ActiveAfter     *time.Time
+	ActiveBefore    *time.Time
+	StartedAfter    *time.Time
+	StartedBefore   *time.Time
+	CWD             string
+	TopicMode       string
+	AnalysisStatus  string
+	Cmux            string
+	Sort            string
+	Cursor          string
+	Limit           int
 }
 
 // SessionHit is one filtered session plus its best text-match snippet.
@@ -93,7 +94,7 @@ func (s *Store) SearchSessions(ctx context.Context, query SearchQuery) (SearchRe
 
 	var matches map[string]textMatch
 	if strings.TrimSpace(query.Text) != "" {
-		matches, err = s.textMatches(ctx, query.Text)
+		matches, err = s.textMatches(ctx, query.Text, query.IncludeMessages)
 		if err != nil {
 			return SearchResult{}, err
 		}
@@ -139,20 +140,39 @@ func (s *Store) SearchSessions(ctx context.Context, query SearchQuery) (SearchRe
 	return result, nil
 }
 
-func (s *Store) textMatches(ctx context.Context, text string) (map[string]textMatch, error) {
+const searchDocumentEligibility = `(
+    session_fts.document_type IN ('session', 'segment')
+    OR (
+        session_fts.document_type = 'message'
+        AND (
+            ? = 1
+            OR sessions.analysis_provider IS NULL
+            OR search_message.sequence > sessions.analyzed_through_sequence
+        )
+    )
+)`
+
+func (s *Store) textMatches(ctx context.Context, text string, includeMessages bool) (map[string]textMatch, error) {
 	matchQuery := safeFTSQuery(text)
 	if matchQuery == "" {
-		return s.literalMatches(ctx, text)
+		return s.literalMatches(ctx, text, includeMessages)
 	}
+	matchQuery = "{title body} : (" + matchQuery + ")"
 	rows, err := s.db.QueryContext(ctx, `
-        SELECT session_id,
-               coalesce(nullif(snippet(session_fts, 4, '', '', '...', 18), ''), title, working_directory),
-               bm25(session_fts, 0.0, 0.0, 0.0, 10.0, 3.0, 1.0) AS score
+        SELECT session_fts.session_id,
+               coalesce(nullif(snippet(session_fts, 4, '', '', '...', 18), ''), session_fts.title, ''),
+               bm25(session_fts, 0.0, 0.0, 0.0, 10.0, 3.0, 0.0) AS score
         FROM session_fts
+        JOIN sessions ON sessions.id = session_fts.session_id
+        LEFT JOIN messages AS search_message
+          ON session_fts.document_type = 'message'
+         AND search_message.session_id = session_fts.session_id
+         AND session_fts.document_key = printf('message:%d', search_message.sequence)
         WHERE session_fts MATCH ?
-        ORDER BY score`, matchQuery)
+          AND `+searchDocumentEligibility+`
+        ORDER BY score`, matchQuery, includeMessages)
 	if err != nil {
-		return s.literalMatches(ctx, text)
+		return s.literalMatches(ctx, text, includeMessages)
 	}
 	defer rows.Close()
 	matches := make(map[string]textMatch)
@@ -172,13 +192,20 @@ func (s *Store) textMatches(ctx context.Context, text string) (map[string]textMa
 	return matches, nil
 }
 
-func (s *Store) literalMatches(ctx context.Context, text string) (map[string]textMatch, error) {
+func (s *Store) literalMatches(ctx context.Context, text string, includeMessages bool) (map[string]textMatch, error) {
 	pattern := "%" + escapeLike(strings.TrimSpace(text)) + "%"
 	rows, err := s.db.QueryContext(ctx, `
-        SELECT session_id, substr(coalesce(nullif(body, ''), title, working_directory), 1, 240)
+        SELECT session_fts.session_id,
+               substr(coalesce(nullif(session_fts.body, ''), session_fts.title, ''), 1, 240)
         FROM session_fts
-        WHERE lower(title || char(10) || body || char(10) || working_directory)
-              LIKE lower(?) ESCAPE '\'`, pattern)
+        JOIN sessions ON sessions.id = session_fts.session_id
+        LEFT JOIN messages AS search_message
+          ON session_fts.document_type = 'message'
+         AND search_message.session_id = session_fts.session_id
+         AND session_fts.document_key = printf('message:%d', search_message.sequence)
+        WHERE lower(session_fts.title || char(10) || session_fts.body)
+              LIKE lower(?) ESCAPE '\'
+          AND `+searchDocumentEligibility, pattern, includeMessages)
 	if err != nil {
 		return nil, fmt.Errorf("query literal matches: %w", err)
 	}

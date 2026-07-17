@@ -18,10 +18,14 @@ func TestSearchTextAndCombinedFilters(t *testing.T) {
 		want  []string
 	}{
 		{name: "generated concept", query: SearchQuery{Text: "idempotency ledger"}, want: []string{"s1"}},
-		{name: "exact error", query: SearchQuery{Text: "database is locked"}, want: []string{"s2"}},
-		{name: "filename punctuation", query: SearchQuery{Text: "internal/auth.go"}, want: []string{"s1"}},
-		{name: "unicode", query: SearchQuery{Text: "café retry"}, want: []string{"s3"}},
-		{name: "literal punctuation fallback", query: SearchQuery{Text: ":"}, want: []string{"s2"}},
+		{name: "analyzed transcript excluded", query: SearchQuery{Text: "database is locked"}, want: nil},
+		{name: "analyzed transcript included", query: SearchQuery{Text: "database is locked", IncludeMessages: true}, want: []string{"s2"}},
+		{name: "analyzed filename excluded", query: SearchQuery{Text: "internal/auth.go"}, want: nil},
+		{name: "analyzed filename included", query: SearchQuery{Text: "internal/auth.go", IncludeMessages: true}, want: []string{"s1"}},
+		{name: "unicode generated title", query: SearchQuery{Text: "café retry"}, want: []string{"s3"}},
+		{name: "literal analyzed transcript excluded", query: SearchQuery{Text: ":"}, want: nil},
+		{name: "literal analyzed transcript included", query: SearchQuery{Text: ":", IncludeMessages: true}, want: []string{"s2"}},
+		{name: "unanalyzed message fallback", query: SearchQuery{Text: "archive old ledger"}, want: []string{"s4"}},
 		{name: "agent folder multiple", query: SearchQuery{Agent: "codex", CWD: "payments", TopicMode: "multiple", AnalysisStatus: "current"}, want: []string{"s1"}},
 	}
 	for _, test := range tests {
@@ -35,6 +39,57 @@ func TestSearchTextAndCombinedFilters(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSearchFocusedScopeIncludesOnlyUnsummarizedTail(t *testing.T) {
+	database := searchFixture(t)
+	ctx := context.Background()
+	detail, err := database.GetSession(ctx, "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := detail.Session
+	session.SourceSize++
+	session.SourceHash = "h1-appended"
+	session.SourceMTime = session.SourceMTime.Add(time.Minute)
+	session.LastActiveAt = session.LastActiveAt.Add(time.Minute)
+	messages := append([]Message(nil), detail.Messages...)
+	messages = append(messages, Message{
+		Sequence: 2, Timestamp: session.LastActiveAt, Role: "assistant",
+		Text: "Unsummarized zircon checksum result",
+	})
+	if _, err := database.ImportSession(ctx, session, messages); err != nil {
+		t.Fatal(err)
+	}
+
+	assertSearchQueryIDs(t, database, SearchQuery{Text: "zircon checksum"}, []string{"s1"})
+	assertSearchQueryIDs(t, database, SearchQuery{Text: "internal auth"}, nil)
+	assertSearchQueryIDs(t, database, SearchQuery{Text: "internal auth", IncludeMessages: true}, []string{"s1"})
+}
+
+func TestSearchFocusedScopeUsesStoredAnalysisProvenance(t *testing.T) {
+	for _, status := range []string{"queued", "running", "failed"} {
+		t.Run(status, func(t *testing.T) {
+			database := searchFixture(t)
+			ctx := context.Background()
+			if err := database.SetAnalysisStatus(ctx, "s2", status, "retry later"); err != nil {
+				t.Fatal(err)
+			}
+			assertSearchQueryIDs(t, database, SearchQuery{Text: "database is locked"}, nil)
+
+			if err := database.SetAnalysisStatus(ctx, "s4", status, "not analyzed"); err != nil {
+				t.Fatal(err)
+			}
+			assertSearchQueryIDs(t, database, SearchQuery{Text: "archive old ledger"}, []string{"s4"})
+		})
+	}
+}
+
+func TestSearchKeywordsExcludeWorkingDirectoryColumn(t *testing.T) {
+	database := searchFixture(t)
+	assertSearchQueryIDs(t, database, SearchQuery{Text: "work search"}, nil)
+	assertSearchQueryIDs(t, database, SearchQuery{Text: "work search", IncludeMessages: true}, nil)
+	assertSearchQueryIDs(t, database, SearchQuery{CWD: "work/search"}, []string{"s2"})
 }
 
 func TestSearchWeightsGeneratedTitlesAboveRawMessages(t *testing.T) {
@@ -231,12 +286,17 @@ func searchFixture(t *testing.T) *Store {
 
 func assertSearchIDs(t *testing.T, database *Store, query string, want []string) {
 	t.Helper()
-	result, err := database.SearchSessions(context.Background(), SearchQuery{Text: query})
+	assertSearchQueryIDs(t, database, SearchQuery{Text: query}, want)
+}
+
+func assertSearchQueryIDs(t *testing.T, database *Store, query SearchQuery, want []string) {
+	t.Helper()
+	result, err := database.SearchSessions(context.Background(), query)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := hitIDs(result.Hits); fmt.Sprint(got) != fmt.Sprint(want) {
-		t.Fatalf("search %q IDs = %v, want %v", query, got, want)
+		t.Fatalf("SearchSessions(%#v) IDs = %v, want %v", query, got, want)
 	}
 }
 
