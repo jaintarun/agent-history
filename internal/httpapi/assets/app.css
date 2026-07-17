@@ -128,6 +128,7 @@ h3 { margin-bottom: 5px; font-size: 14px; line-height: 1.4; }
 .topic-title { font-weight: 700; overflow-wrap: anywhere; }
 .topic-summary { margin-top: 2px; color: var(--text-muted); font-size: 12px; line-height: 1.4; }
 .topic-detail { padding: 0 4px 13px 36px; line-height: 1.55; white-space: pre-wrap; }
+.topic-summary, .topic-detail { overflow-wrap: anywhere; }
 .check-row { display: flex; align-items: center; gap: 7px; color: var(--text-muted); font-size: 12px; }
 .check-row input { min-height: auto; }
 .messages { display: grid; gap: 0; border-top: 1px solid var(--line); }

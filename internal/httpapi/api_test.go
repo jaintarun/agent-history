@@ -198,6 +198,7 @@ func TestWebApplicationIncludesCoreWorkflows(t *testing.T) {
 		".search-controls {",
 		".include-messages-control {",
 		"flex-wrap: wrap;",
+		".topic-summary, .topic-detail { overflow-wrap: anywhere; }",
 		"font-variant-numeric: tabular-nums;",
 		"@media (max-width: 480px)",
 		".header-actions { justify-content: flex-start; gap: 6px; }",
