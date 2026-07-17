@@ -146,12 +146,25 @@ The embedded UI supports:
 - start, last activity, total span, source path, and native session ID;
 - overview, topic chapters, detailed evidence, and visible messages;
 - Analyze, Reanalyze, Retitle, Retitle weak titles, Delete analysis, Rescan,
-  Scan, Settings, and Resume; and
+  Scan, Settings, Resume normally, and an agent-specific permission-bypass
+  resume action; and
 - keyboard result navigation and a responsive narrow layout.
 
 Delete analysis preserves imported messages. Resume uses only validated stored
-metadata. `auto` launches `cmux workspace create` when cmux is installed;
-otherwise the UI returns a safely quoted resume command to copy.
+metadata. Codex sessions show **Resume normally** and **Resume with YOLO**;
+Claude sessions show **Resume normally** and **Resume with dangerously skipped
+permissions**. The bypass actions generate:
+
+```text
+codex resume --dangerously-bypass-approvals-and-sandbox <session-id>
+claude --dangerously-skip-permissions --resume <session-id>
+```
+
+These actions disable the corresponding vendor safeguards for the resumed
+process and must be chosen explicitly for each launch. The browser can select
+only normal or bypass; it cannot submit flags or command text. `auto` launches
+`cmux workspace create` when cmux is installed; otherwise the UI returns a
+safely quoted resume command to copy.
 
 ## cmux Status And Title Sync
 
@@ -209,7 +222,7 @@ search, and browsing continue normally.
   not transcript text or request bodies.
 - Settings reject secret-like keys and never return inherited credentials.
 - cmux argv is generated from validated source metadata; the browser cannot
-  submit an executable or arbitrary command.
+  submit an executable, arbitrary command, or resume flag.
 - cmux socket paths and raw connection errors are not returned by the web API.
 
 Individual transcripts are limited to 4 GB and individual JSONL records to 64

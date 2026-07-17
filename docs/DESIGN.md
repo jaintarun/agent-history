@@ -86,8 +86,8 @@ only invoke a resume specification created by a trusted source adapter.
 - Filter by agent, last-active date, custom date range, working directory,
   focused/multiple-topic status, and analysis state.
 - Serve a self-contained web application from the Go binary.
-- Analyze, reanalyze, delete analysis, rescan, copy a resume command, and launch
-  through cmux when available.
+- Analyze, reanalyze, delete analysis, rescan, and resume normally or with an
+  explicit agent-specific permission bypass through cmux or a copyable command.
 
 ### Not included initially
 
@@ -161,7 +161,11 @@ The detail view exposes only the core actions:
   current titles.
 - **Delete analysis**: remove generated analysis while preserving messages.
 - **Rescan**: reread the source transcript and update normalized messages.
-- **Resume**: launch the original session or provide a copyable resume command.
+- **Resume normally**: launch the original session with the source CLI's normal
+  permission behavior or provide a copyable command.
+- **Resume with bypass**: explicitly launch Codex with
+  `--dangerously-bypass-approvals-and-sandbox` or Claude with
+  `--dangerously-skip-permissions`.
 
 ## System Architecture
 
@@ -610,11 +614,19 @@ type ResumeSpec struct {
 }
 ```
 
-Initial specifications are equivalent to:
+Source adapter specifications remain equivalent to the normal commands:
 
 ```text
 codex resume <session-id>
 claude --resume <session-id>
+```
+
+After validating that normal specification against stored metadata, the
+launcher may apply the fixed `bypass` transform:
+
+```text
+codex resume --dangerously-bypass-approvals-and-sandbox <session-id>
+claude --dangerously-skip-permissions --resume <session-id>
 ```
 
 The launch endpoint supports two outcomes:
@@ -625,9 +637,12 @@ The launch endpoint supports two outcomes:
    when no supported launcher is available.
 
 `auto` chooses cmux when its executable is found and otherwise uses the copy
-path. The API accepts only a session ID and launcher selection; it never accepts
-an arbitrary executable or command from the browser. Native session IDs are
-validated before command construction.
+path. The API accepts only a session ID, `auto|cmux|copy` launcher selection,
+and `normal|bypass` permission selection. An omitted permission selection
+defaults to `normal`. It never accepts an arbitrary executable, command, or flag
+from the browser. Native session IDs, working directories, and the exact normal
+source specification are validated before command construction or bypass flag
+insertion.
 
 Launching a generic macOS terminal is deferred because it requires terminal-
 specific automation and permissions. It can be added as another launcher
@@ -684,7 +699,8 @@ The first release is successful when a developer can:
    last activity, and span.
 5. Reanalyze a session without losing the previous result on failure.
 6. Delete analysis without deleting messages.
-7. Resume through cmux or copy a valid resume command.
+7. Resume normally or with the matching agent-specific permission bypass
+   through cmux or a valid copyable command.
 8. Run the binary and web UI without Node.js or external static assets.
 9. Append new conversation to a multi-day session without re-sending sealed
    history to the analyzer.

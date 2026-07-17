@@ -332,7 +332,8 @@ Every frontend workflow can be completed with HTTP requests alone.
   - analysis state and errors;
   - analyzed-through status for sessions with new unsealed conversation;
   - Analyze, Reanalyze, Retitle, bulk weak-title retitling, Delete analysis,
-    Rescan, and Resume actions;
+    Rescan, Resume normally, and the matching agent-specific permission-bypass
+    action;
   - confirmation for analysis deletion;
   - copyable resume-command fallback;
   - keyboard result navigation and focus handling.
@@ -352,7 +353,7 @@ Every frontend workflow can be completed with HTTP requests alone.
   - topic expansion;
   - successful and failed reanalysis;
   - destructive confirmation;
-  - copy-resume fallback.
+  - normal and permission-bypass copy-resume fallback.
 - Capture and inspect desktop and mobile-width screenshots.
 - Check browser console errors and ensure no external network assets load.
 - Verify controls with keyboard-only navigation and accessible names.
@@ -367,7 +368,11 @@ resume-command experience.
 ### Work
 
 - Define the `Launcher` interface around structured `ResumeSpec` values.
-- Implement safe rendering of copyable Codex and Claude resume commands.
+- Implement safe rendering of normal and permission-bypass Codex and Claude
+  resume commands.
+- Accept only fixed `normal|bypass` permission modes, default an omitted mode to
+  `normal`, validate the normal `ResumeSpec`, and then insert the
+  application-owned agent-specific bypass flag.
 - Implement launcher selection:
   - `auto`
   - `cmux`
@@ -381,21 +386,25 @@ resume-command experience.
   failing the session view.
 - Reject unsafe native session IDs, missing source sessions, invalid cwd paths,
   and unsupported agents.
-- Never accept arbitrary command text from the HTTP request.
+- Never accept arbitrary command text, executable paths, or flags from the HTTP
+  request.
 
 ### Verification
 
-- Unit tests assert exact subprocess argv and command quoting.
+- Unit tests assert exact normal and bypass subprocess argv, command quoting,
+  and that bypass construction does not mutate the normal `ResumeSpec`.
 - Tests cover spaces and quotes in cwd and title.
 - A fake cmux executable verifies launch success and error handling.
-- Manual dogfood verifies that Codex and Claude sessions resume in newly created
-  cmux workspaces.
-- The browser displays and copies the fallback command when cmux is unavailable.
+- Manual dogfood verifies normal and matching bypass controls for both agents
+  without executing a real resume during automated checks.
+- The browser displays the exact selected normal or bypass fallback command when
+  cmux is unavailable.
 
 ### Exit condition
 
-A user can move from search result to resumed agent session with one explicit
-action when cmux is present, and with copy/paste otherwise.
+A user can move from a search result to a normal or explicitly bypassed resumed
+agent session when cmux is present, and receive the matching copyable command
+otherwise.
 
 ## Phase 9: Operational Hardening and First Release
 

@@ -1,7 +1,7 @@
 # Resume Permission Modes Design
 
 **Date:** 2026-07-16
-**Status:** Design approved; pending written-spec review
+**Status:** Implemented
 
 ## Purpose
 
