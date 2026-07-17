@@ -18,29 +18,52 @@ func TestStartupScriptsAreIdempotent(t *testing.T) {
 	if !ok {
 		t.Fatal("locate test file")
 	}
-	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(filename), "..", ".."))
+	sourceRoot := filepath.Clean(filepath.Join(filepath.Dir(filename), "..", ".."))
+	repoRoot := filepath.Join(t.TempDir(), "Agent History Repo")
+	if err := os.MkdirAll(repoRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"install-startup.sh", "uninstall-startup.sh", "run-local.sh"} {
+		content, err := os.ReadFile(filepath.Join(sourceRoot, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(repoRoot, name), content, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
 	installScript := filepath.Join(repoRoot, "install-startup.sh")
 	uninstallScript := filepath.Join(repoRoot, "uninstall-startup.sh")
 
 	home := t.TempDir()
 	fakeBin := t.TempDir()
-	statePath := filepath.Join(t.TempDir(), "launchctl-state")
+	stateDir := filepath.Join(t.TempDir(), "launchctl-state")
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	logPath := filepath.Join(t.TempDir(), "launchctl.log")
 	bootstrapAttemptsPath := filepath.Join(t.TempDir(), "bootstrap-attempts")
 	writeExecutable(t, filepath.Join(fakeBin, "launchctl"), `#!/bin/sh
 set -eu
 printf '%s\n' "$*" >> "$FAKE_LAUNCH_LOG"
 case "$1" in
-  print) test -f "$FAKE_LAUNCH_STATE" ;;
+  print)
+    label=${2##*/}
+    test -f "$FAKE_LAUNCH_STATE_DIR/$label"
+    ;;
   bootstrap)
     attempts=0
     if test -f "$FAKE_BOOTSTRAP_ATTEMPTS"; then attempts=$(cat "$FAKE_BOOTSTRAP_ATTEMPTS"); fi
     attempts=$((attempts + 1))
     printf '%s\n' "$attempts" > "$FAKE_BOOTSTRAP_ATTEMPTS"
     if test "$attempts" -eq 1; then exit 5; fi
-    : > "$FAKE_LAUNCH_STATE"
+    label=$(basename "$3" .plist)
+    : > "$FAKE_LAUNCH_STATE_DIR/$label"
     ;;
-  bootout) rm -f "$FAKE_LAUNCH_STATE" ;;
+  bootout)
+    label=${2##*/}
+    rm -f "$FAKE_LAUNCH_STATE_DIR/$label"
+    ;;
   enable|disable|kickstart) ;;
   *) exit 2 ;;
 esac
@@ -55,21 +78,39 @@ exit 1
 	environment := append(os.Environ(),
 		"HOME="+home,
 		"PATH="+fakeBin+":/usr/bin:/bin:/usr/sbin:/sbin",
-		"FAKE_LAUNCH_STATE="+statePath,
+		"FAKE_LAUNCH_STATE_DIR="+stateDir,
 		"FAKE_LAUNCH_LOG="+logPath,
 		"FAKE_BOOTSTRAP_ATTEMPTS="+bootstrapAttemptsPath,
 	)
+	legacyLabel := "com.tarunjain.agent-history"
+	legacyPlist := filepath.Join(home, "Library", "LaunchAgents", legacyLabel+".plist")
+	if err := os.MkdirAll(filepath.Dir(legacyPlist), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacyPlist, []byte("legacy"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, legacyLabel), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	runStartupScript(t, installScript, environment)
 	runStartupScript(t, installScript, environment)
 
-	plistPath := filepath.Join(home, "Library", "LaunchAgents", "com.tarunjain.agent-history.plist")
+	label := "io.github.jaintarun.agent-history"
+	plistPath := filepath.Join(home, "Library", "LaunchAgents", label+".plist")
 	if output, err := exec.Command("plutil", "-lint", plistPath).CombinedOutput(); err != nil {
 		t.Fatalf("lint generated plist: %v: %s", err, output)
 	}
-	assertPlistValue(t, plistPath, "Label", "com.tarunjain.agent-history")
+	assertPlistValue(t, plistPath, "Label", label)
 	assertPlistValue(t, plistPath, "RunAtLoad", "true")
 	assertPlistValue(t, plistPath, "KeepAlive", "true")
 	assertPlistValue(t, plistPath, "ProgramArguments.1", filepath.Join(repoRoot, "run-local.sh"))
+	if _, err := os.Stat(legacyPlist); !os.IsNotExist(err) {
+		t.Fatalf("legacy plist still exists: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(stateDir, legacyLabel)); !os.IsNotExist(err) {
+		t.Fatalf("legacy service still exists: %v", err)
+	}
 	logData, err := os.ReadFile(logPath)
 	if err != nil {
 		t.Fatal(err)
@@ -83,12 +124,15 @@ exit 1
 	if _, err := os.Stat(plistPath); !os.IsNotExist(err) {
 		t.Fatalf("plist still exists after uninstall: %v", err)
 	}
+	if entries, err := os.ReadDir(stateDir); err != nil || len(entries) != 0 {
+		t.Fatalf("launch state after uninstall = %v, %v", entries, err)
+	}
 	logData, err = os.ReadFile(logPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := countLaunchctlCommand(string(logData), "bootout "); got != 1 {
-		t.Fatalf("bootout count = %d, want 1; log:\n%s", got, logData)
+	if got := countLaunchctlCommand(string(logData), "bootout "); got != 2 {
+		t.Fatalf("bootout count = %d, want 2; log:\n%s", got, logData)
 	}
 }
 

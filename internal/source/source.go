@@ -6,7 +6,7 @@ import (
 	"encoding/hex"
 	"time"
 
-	"github.com/tarunjain/agent-history/internal/store"
+	"github.com/jaintarun/agent-history/internal/store"
 )
 
 // Message is a normalized visible transcript message.

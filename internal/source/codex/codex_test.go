@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tarunjain/agent-history/internal/source"
+	"github.com/jaintarun/agent-history/internal/source"
 )
 
 func TestReadNormalizesVisibleRecords(t *testing.T) {

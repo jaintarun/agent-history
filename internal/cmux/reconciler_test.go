@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tarunjain/agent-history/internal/store"
+	"github.com/jaintarun/agent-history/internal/store"
 )
 
 func TestWorkspaceActivityColorBoundaries(t *testing.T) {

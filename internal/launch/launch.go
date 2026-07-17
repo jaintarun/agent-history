@@ -11,8 +11,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/tarunjain/agent-history/internal/source"
-	"github.com/tarunjain/agent-history/internal/store"
+	"github.com/jaintarun/agent-history/internal/source"
+	"github.com/jaintarun/agent-history/internal/store"
 )
 
 var safeSessionID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$`)

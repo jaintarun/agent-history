@@ -5,7 +5,7 @@ import (
 	"errors"
 	"sync"
 
-	"github.com/tarunjain/agent-history/internal/store"
+	"github.com/jaintarun/agent-history/internal/store"
 )
 
 var (

@@ -1,4 +1,4 @@
-module github.com/tarunjain/agent-history
+module github.com/jaintarun/agent-history
 
 go 1.24.0
 

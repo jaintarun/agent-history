@@ -19,10 +19,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tarunjain/agent-history/internal/analyze"
-	"github.com/tarunjain/agent-history/internal/launch"
-	"github.com/tarunjain/agent-history/internal/source"
-	"github.com/tarunjain/agent-history/internal/store"
+	"github.com/jaintarun/agent-history/internal/analyze"
+	"github.com/jaintarun/agent-history/internal/launch"
+	"github.com/jaintarun/agent-history/internal/source"
+	"github.com/jaintarun/agent-history/internal/store"
 )
 
 const maxJSONBody = 1 << 20

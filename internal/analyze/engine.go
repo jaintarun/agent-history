@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tarunjain/agent-history/internal/store"
+	"github.com/jaintarun/agent-history/internal/store"
 )
 
 const (

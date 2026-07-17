@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tarunjain/agent-history/internal/source"
-	"github.com/tarunjain/agent-history/internal/source/claude"
-	"github.com/tarunjain/agent-history/internal/source/codex"
-	"github.com/tarunjain/agent-history/internal/store"
+	"github.com/jaintarun/agent-history/internal/source"
+	"github.com/jaintarun/agent-history/internal/source/claude"
+	"github.com/jaintarun/agent-history/internal/source/codex"
+	"github.com/jaintarun/agent-history/internal/store"
 
 	_ "modernc.org/sqlite"
 )

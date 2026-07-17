@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tarunjain/agent-history/internal/analyze"
-	"github.com/tarunjain/agent-history/internal/source"
-	"github.com/tarunjain/agent-history/internal/store"
+	"github.com/jaintarun/agent-history/internal/analyze"
+	"github.com/jaintarun/agent-history/internal/source"
+	"github.com/jaintarun/agent-history/internal/store"
 )
 
 func TestVersion(t *testing.T) {

@@ -1,13 +1,16 @@
 #!/bin/sh
 set -eu
 
-label="com.tarunjain.agent-history"
+label="io.github.jaintarun.agent-history"
+legacy_label="com.tarunjain.agent-history"
 domain="gui/$(id -u)"
 service="$domain/$label"
+legacy_service="$domain/$legacy_label"
 repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 run_script="$repo_dir/run-local.sh"
 plist_dir="$HOME/Library/LaunchAgents"
 plist_path="$plist_dir/$label.plist"
+legacy_plist_path="$plist_dir/$legacy_label.plist"
 log_dir="$HOME/Library/Logs"
 runtime_path="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$HOME/.local/bin:/Applications/cmux.app/Contents/Resources/bin"
 
@@ -45,6 +48,21 @@ plistbuddy=/usr/libexec/PlistBuddy
 "$plistbuddy" -c "Add :StandardOutPath string $log_dir/agent-history.log" "$tmp_plist" >/dev/null
 "$plistbuddy" -c "Add :StandardErrorPath string $log_dir/agent-history.error.log" "$tmp_plist" >/dev/null
 plutil -lint "$tmp_plist" >/dev/null
+
+if launchctl print "$legacy_service" >/dev/null 2>&1; then
+  launchctl bootout "$legacy_service"
+  attempts=0
+  while launchctl print "$legacy_service" >/dev/null 2>&1; do
+    attempts=$((attempts + 1))
+    if [ "$attempts" -ge 50 ]; then
+      printf 'Timed out waiting for the legacy Agent History job to stop.\n' >&2
+      exit 1
+    fi
+    sleep 0.1
+  done
+fi
+launchctl disable "$legacy_service" >/dev/null 2>&1 || true
+rm -f "$legacy_plist_path"
 
 loaded=false
 if launchctl print "$service" >/dev/null 2>&1; then

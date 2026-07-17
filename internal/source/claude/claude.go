@@ -20,8 +20,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/tarunjain/agent-history/internal/source"
-	"github.com/tarunjain/agent-history/internal/store"
+	"github.com/jaintarun/agent-history/internal/source"
+	"github.com/jaintarun/agent-history/internal/store"
 )
 
 const (

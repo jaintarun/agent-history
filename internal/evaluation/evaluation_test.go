@@ -6,7 +6,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/tarunjain/agent-history/internal/analyze"
+	"github.com/jaintarun/agent-history/internal/analyze"
 )
 
 func TestEvaluationUsesFakeAnalyzerAndReportsMetrics(t *testing.T) {

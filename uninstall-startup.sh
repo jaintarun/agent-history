@@ -1,11 +1,10 @@
 #!/bin/sh
 set -eu
 
-label="com.tarunjain.agent-history"
+label="io.github.jaintarun.agent-history"
+legacy_label="com.tarunjain.agent-history"
 domain="gui/$(id -u)"
-service="$domain/$label"
 repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-plist_path="$HOME/Library/LaunchAgents/$label.plist"
 removed=false
 
 if [ "$(uname -s)" != "Darwin" ]; then
@@ -13,25 +12,28 @@ if [ "$(uname -s)" != "Darwin" ]; then
   exit 1
 fi
 
-if launchctl print "$service" >/dev/null 2>&1; then
-  launchctl bootout "$service"
-  attempts=0
-  while launchctl print "$service" >/dev/null 2>&1; do
-    attempts=$((attempts + 1))
-    if [ "$attempts" -ge 50 ]; then
-      printf 'Timed out waiting for the Agent History job to stop.\n' >&2
-      exit 1
-    fi
-    sleep 0.1
-  done
-  removed=true
-fi
-launchctl disable "$service" >/dev/null 2>&1 || true
-
-if [ -f "$plist_path" ]; then
-  rm -f "$plist_path"
-  removed=true
-fi
+for current_label in "$label" "$legacy_label"; do
+  service="$domain/$current_label"
+  plist_path="$HOME/Library/LaunchAgents/$current_label.plist"
+  if launchctl print "$service" >/dev/null 2>&1; then
+    launchctl bootout "$service"
+    attempts=0
+    while launchctl print "$service" >/dev/null 2>&1; do
+      attempts=$((attempts + 1))
+      if [ "$attempts" -ge 50 ]; then
+        printf 'Timed out waiting for the Agent History job to stop.\n' >&2
+        exit 1
+      fi
+      sleep 0.1
+    done
+    removed=true
+  fi
+  launchctl disable "$service" >/dev/null 2>&1 || true
+  if [ -f "$plist_path" ]; then
+    rm -f "$plist_path"
+    removed=true
+  fi
+done
 
 listener_pids=$(lsof -tiTCP:54321 -sTCP:LISTEN 2>/dev/null || true)
 for pid in $listener_pids; do
