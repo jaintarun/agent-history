@@ -54,7 +54,7 @@ func TestPlainURLHandlerServesRootPaths(t *testing.T) {
 	_, database, scanner, queue, launcher, _ := testHandler(t)
 	handler, err := NewHandler(Config{
 		PlainURL: true, Store: database, Scanner: scanner, Queue: queue,
-		Launcher: launcher, AnalysisDefaults: analyze.Options{
+		Launcher: launcher, AnalysisProviders: testAnalysisProviders(), AnalysisDefaults: analyze.Options{
 			Provider: "codex-cli", Model: "test", PromptVersion: "v1", NormalizerVersion: "v1",
 		},
 	})
@@ -623,23 +623,81 @@ func TestSettingsAreValidatedAndNeverExposeSecrets(t *testing.T) {
 	if strings.Contains(strings.ToLower(response.Body.String()), "key") || strings.Contains(strings.ToLower(response.Body.String()), "credential") {
 		t.Fatalf("settings response appears to expose secret fields: %s", response.Body.String())
 	}
+	var initial struct {
+		Providers []struct {
+			ID           string `json:"id"`
+			Name         string `json:"name"`
+			DefaultModel string `json:"default_model"`
+			Available    bool   `json:"available"`
+		} `json:"analysis_providers"`
+	}
+	decodeResponse(t, response, &initial)
+	if len(initial.Providers) != 2 ||
+		initial.Providers[0].ID != "codex-cli" || initial.Providers[0].DefaultModel != "gpt-5.4-mini" || !initial.Providers[0].Available ||
+		initial.Providers[1].ID != "claude-cli" || initial.Providers[1].Name != "Claude Code" ||
+		initial.Providers[1].DefaultModel != "haiku" || initial.Providers[1].Available {
+		t.Fatalf("provider catalog = %#v", initial.Providers)
+	}
 
-	response = serve(handler, jsonRequest(http.MethodPut, "/test-token/api/settings", `{"analysis_provider":"codex-cli","analysis_model":"new-model","analysis_auto":false}`))
+	response = serve(handler, jsonRequest(http.MethodPut, "/test-token/api/settings", `{"analysis_provider":"claude-cli","analysis_model":"sonnet","analysis_auto":false}`))
 	if response.Code != http.StatusOK {
 		t.Fatalf("put settings status = %d body=%s", response.Code, response.Body.String())
 	}
 	model, ok, err := database.Setting(context.Background(), "analysis.model")
-	if err != nil || !ok || model != "new-model" {
+	if err != nil || !ok || model != "sonnet" {
 		t.Fatalf("stored model = %q, %v, %v", model, ok, err)
+	}
+	response = serve(handler, jsonRequest(http.MethodPut, "/test-token/api/settings", `{"analysis_auto":true}`))
+	if response.Code != http.StatusOK {
+		t.Fatalf("partial settings status = %d body=%s", response.Code, response.Body.String())
 	}
 	response = serve(handler, jsonRequest(http.MethodPost, "/test-token/api/sessions/session-1/analyze", `{}`))
 	if response.Code != http.StatusAccepted {
 		t.Fatalf("analyze status = %d body=%s", response.Code, response.Body.String())
 	}
+	response = serve(handler, jsonRequest(http.MethodPost, "/test-token/api/sessions/session-1/retitle", `{}`))
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("retitle status = %d body=%s", response.Code, response.Body.String())
+	}
 	queue.mu.Lock()
 	defer queue.mu.Unlock()
-	if len(queue.jobs) != 1 || queue.jobs[0].options.Model != "new-model" {
-		t.Fatalf("analysis did not use saved model: %#v", queue.jobs)
+	if len(queue.jobs) != 2 ||
+		queue.jobs[0].options.Provider != "claude-cli" || queue.jobs[0].options.Model != "sonnet" ||
+		queue.jobs[1].options.Provider != "claude-cli" || queue.jobs[1].options.Model != "sonnet" {
+		t.Fatalf("analysis did not use saved provider and model: %#v", queue.jobs)
+	}
+}
+
+func TestAnalysisProviderAndModelValidation(t *testing.T) {
+	handler, _, _, queue, _, _ := testHandler(t)
+	for _, test := range []struct {
+		name string
+		body string
+	}{
+		{name: "unknown provider setting", body: `{"analysis_provider":"shell","analysis_model":"model"}`},
+		{name: "blank model setting", body: `{"analysis_provider":"codex-cli","analysis_model":" "}`},
+		{name: "long model setting", body: `{"analysis_provider":"codex-cli","analysis_model":"` + strings.Repeat("x", 201) + `"}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			response := serve(handler, jsonRequest(http.MethodPut, "/test-token/api/settings", test.body))
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d body=%s", response.Code, response.Body.String())
+			}
+		})
+	}
+
+	response := serve(handler, jsonRequest(http.MethodPost, "/test-token/api/sessions/session-1/analyze", `{"provider":"claude-cli","model":"haiku"}`))
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("supported provider status = %d body=%s", response.Code, response.Body.String())
+	}
+	response = serve(handler, jsonRequest(http.MethodPost, "/test-token/api/sessions/session-1/analyze", `{"provider":"shell","model":"anything"}`))
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("unknown provider status = %d body=%s", response.Code, response.Body.String())
+	}
+	queue.mu.Lock()
+	defer queue.mu.Unlock()
+	if len(queue.jobs) != 1 || queue.jobs[0].options.Provider != "claude-cli" {
+		t.Fatalf("queued jobs = %#v", queue.jobs)
 	}
 }
 
@@ -813,6 +871,7 @@ func testHandler(t *testing.T) (http.Handler, *store.Store, *fakeScanner, *fakeQ
 	handler, err := NewHandler(Config{
 		Token: "test-token", Store: database, Scanner: scanner, Queue: queue,
 		Launcher: launcher, Logger: slog.New(slog.NewTextHandler(logs, nil)),
+		AnalysisProviders: testAnalysisProviders(),
 		AnalysisDefaults: analyze.Options{
 			Provider: "codex-cli", Model: "default-model", PromptVersion: "v1",
 			NormalizerVersion: "v1", LeafTargetChars: 12_000, RollupFanout: 8,
@@ -822,6 +881,13 @@ func testHandler(t *testing.T) (http.Handler, *store.Store, *fakeScanner, *fakeQ
 		t.Fatal(err)
 	}
 	return handler, database, scanner, queue, launcher, logs
+}
+
+func testAnalysisProviders() []analyze.Provider {
+	return []analyze.Provider{
+		{ID: "codex-cli", Name: "Codex", DefaultModel: "gpt-5.4-mini", Available: true},
+		{ID: "claude-cli", Name: "Claude Code", DefaultModel: "haiku", Available: false},
+	}
 }
 
 func apiRequest(method, target string, body io.Reader) *http.Request {

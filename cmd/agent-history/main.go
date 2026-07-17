@@ -154,7 +154,7 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 	cmuxReconciler := cmuxintegration.NewReconciler(cmuxintegration.NewClient(""), database, home, logger)
 	server, err := httpapi.Start(ctx, *bind, httpapi.Config{
 		Store: database, Scanner: scanner, Queue: worker, Launcher: launcher, Cmux: cmuxReconciler, Logger: logger,
-		AnalysisDefaults: options, PlainURL: *noURLToken,
+		AnalysisDefaults: options, AnalysisProviders: providers, PlainURL: *noURLToken,
 	})
 	if err != nil {
 		worker.Close()

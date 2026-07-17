@@ -59,28 +59,30 @@ type LaunchResult = launch.Result
 
 // Config supplies API dependencies and process-local security state.
 type Config struct {
-	Token            string
-	PlainURL         bool
-	Store            *store.Store
-	Scanner          Scanner
-	Queue            AnalysisQueue
-	Launcher         Launcher
-	Cmux             Cmux
-	Logger           *slog.Logger
-	AnalysisDefaults analyze.Options
+	Token             string
+	PlainURL          bool
+	Store             *store.Store
+	Scanner           Scanner
+	Queue             AnalysisQueue
+	Launcher          Launcher
+	Cmux              Cmux
+	Logger            *slog.Logger
+	AnalysisDefaults  analyze.Options
+	AnalysisProviders []analyze.Provider
 }
 
 type handler struct {
-	token            string
-	prefix           string
-	store            *store.Store
-	scanner          Scanner
-	queue            AnalysisQueue
-	launcher         Launcher
-	cmux             Cmux
-	logger           *slog.Logger
-	analysisDefaults analyze.Options
-	mux              *http.ServeMux
+	token             string
+	prefix            string
+	store             *store.Store
+	scanner           Scanner
+	queue             AnalysisQueue
+	launcher          Launcher
+	cmux              Cmux
+	logger            *slog.Logger
+	analysisDefaults  analyze.Options
+	analysisProviders []analyze.Provider
+	mux               *http.ServeMux
 }
 
 // NewToken returns an unguessable URL path token.
@@ -103,6 +105,9 @@ func NewHandler(config Config) (http.Handler, error) {
 	if config.Store == nil {
 		return nil, errors.New("httpapi: store is required")
 	}
+	if _, ok := analyze.FindProvider(config.AnalysisProviders, config.AnalysisDefaults.Provider); !ok {
+		return nil, errors.New("httpapi: default analysis provider is not supported")
+	}
 	if config.Logger == nil {
 		config.Logger = slog.Default()
 	}
@@ -114,7 +119,8 @@ func NewHandler(config Config) (http.Handler, error) {
 		token: config.Token, prefix: prefix, store: config.Store,
 		scanner: config.Scanner, queue: config.Queue, launcher: config.Launcher, cmux: config.Cmux,
 		logger: config.Logger, analysisDefaults: config.AnalysisDefaults,
-		mux: http.NewServeMux(),
+		analysisProviders: append([]analyze.Provider(nil), config.AnalysisProviders...),
+		mux:               http.NewServeMux(),
 	}
 	h.routes()
 	return h, nil
@@ -307,15 +313,15 @@ func (h *handler) analyze(response http.ResponseWriter, request *http.Request) {
 	options.Provider = settings.AnalysisProvider
 	options.Model = settings.AnalysisModel
 	if body.Provider != "" {
-		if body.Provider != h.analysisDefaults.Provider {
+		if _, ok := analyze.FindProvider(h.analysisProviders, body.Provider); !ok {
 			writeError(response, http.StatusBadRequest, "invalid_provider", "analysis provider is not configured")
 			return
 		}
 		options.Provider = body.Provider
 	}
 	if body.Model != "" {
-		if len(body.Model) > 200 {
-			writeError(response, http.StatusBadRequest, "invalid_model", "model name is too long")
+		if strings.TrimSpace(body.Model) == "" || len(body.Model) > 200 {
+			writeError(response, http.StatusBadRequest, "invalid_model", "model name is invalid")
 			return
 		}
 		options.Model = body.Model
@@ -563,14 +569,22 @@ func (h *handler) pushCmuxTitle(response http.ResponseWriter, request *http.Requ
 }
 
 type settingsResponse struct {
-	AnalysisProvider string `json:"analysis_provider"`
-	AnalysisModel    string `json:"analysis_model"`
-	AnalysisAuto     bool   `json:"analysis_auto"`
-	CmuxTitleSync    bool   `json:"cmux_title_sync"`
-	CmuxAvailable    bool   `json:"cmux_available"`
-	CmuxAccessMode   string `json:"cmux_access_mode"`
-	CmuxError        string `json:"cmux_error"`
-	CmuxObservedAt   string `json:"cmux_observed_at,omitempty"`
+	AnalysisProvider  string                     `json:"analysis_provider"`
+	AnalysisModel     string                     `json:"analysis_model"`
+	AnalysisAuto      bool                       `json:"analysis_auto"`
+	AnalysisProviders []analysisProviderResponse `json:"analysis_providers"`
+	CmuxTitleSync     bool                       `json:"cmux_title_sync"`
+	CmuxAvailable     bool                       `json:"cmux_available"`
+	CmuxAccessMode    string                     `json:"cmux_access_mode"`
+	CmuxError         string                     `json:"cmux_error"`
+	CmuxObservedAt    string                     `json:"cmux_observed_at,omitempty"`
+}
+
+type analysisProviderResponse struct {
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	DefaultModel string `json:"default_model"`
+	Available    bool   `json:"available"`
 }
 
 func (h *handler) getSettings(response http.ResponseWriter, request *http.Request) {
@@ -610,7 +624,8 @@ func (h *handler) putSettings(response http.ResponseWriter, request *http.Reques
 	if body.CmuxTitleSync != nil {
 		current.CmuxTitleSync = *body.CmuxTitleSync
 	}
-	if current.AnalysisProvider != h.analysisDefaults.Provider || strings.TrimSpace(current.AnalysisModel) == "" || len(current.AnalysisModel) > 200 {
+	if _, ok := analyze.FindProvider(h.analysisProviders, current.AnalysisProvider); !ok ||
+		strings.TrimSpace(current.AnalysisModel) == "" || len(current.AnalysisModel) > 200 {
 		writeError(response, http.StatusBadRequest, "invalid_settings", "provider or model is not configured")
 		return
 	}
@@ -631,6 +646,12 @@ func (h *handler) settings(ctx context.Context) (settingsResponse, error) {
 		AnalysisProvider: h.analysisDefaults.Provider,
 		AnalysisModel:    h.analysisDefaults.Model,
 		AnalysisAuto:     true,
+	}
+	for _, provider := range h.analysisProviders {
+		result.AnalysisProviders = append(result.AnalysisProviders, analysisProviderResponse{
+			ID: provider.ID, Name: provider.Name, DefaultModel: provider.DefaultModel,
+			Available: provider.Available,
+		})
 	}
 	for key, destination := range map[string]*string{
 		"analysis.provider": &result.AnalysisProvider,
