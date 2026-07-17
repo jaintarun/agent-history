@@ -104,6 +104,17 @@ func TestEmbeddedWebApplication(t *testing.T) {
 	}
 }
 
+func TestEmbeddedWebApplicationDeclaresFavicon(t *testing.T) {
+	handler, _, _, _, _, _ := testHandler(t)
+	response := serve(handler, apiRequest(http.MethodGet, "/test-token/", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET index status = %d", response.Code)
+	}
+	if !strings.Contains(response.Body.String(), `rel="icon" href="data:,"`) {
+		t.Fatalf("index does not suppress implicit favicon request:\n%s", response.Body.String())
+	}
+}
+
 func TestWebApplicationIncludesCoreWorkflows(t *testing.T) {
 	html, err := webAssets.ReadFile("assets/index.html")
 	if err != nil {
