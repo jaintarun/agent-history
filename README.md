@@ -1,9 +1,29 @@
 # Agent History
 
-Agent History is a local Go application for finding, understanding, and
-resuming old Codex and Claude Code sessions. It imports visible conversation
-into SQLite, builds replaceable three-level summaries through an authenticated
-Codex or Claude Code CLI, and serves a self-contained search UI.
+Agent History is a local, set-it-and-forget-it search tool for Codex and Claude
+Code sessions. It continuously imports new activity, builds useful titles and
+three-level summaries, and keeps everything searchable in a self-contained
+SQLite-backed web app.
+
+## Highlights
+
+- **Find old work quickly.** Search titles, hierarchical summaries, topics, or
+  full conversations with AND matching. Narrow results by agent, working
+  folder, activity or start date, single- or multi-topic session, analysis
+  state, and whether the session is open in cmux.
+- **Keep history current automatically.** The background service finds new and
+  updated sessions, refreshes affected summaries, and keeps running after login
+  or reboot.
+- **Keep cmux organized.** Compare cmux and generated titles, send a better
+  title to cmux manually, or enable automatic title sync. Active agent sessions
+  also show live state and activity colors.
+- **Resume where you stopped.** Open a Codex or Claude Code session directly in
+  cmux, with normal and permission-bypassing resume options, or copy the resume
+  command when cmux is unavailable.
+
+Install it once, leave it running at
+[http://127.0.0.1:54321/](http://127.0.0.1:54321/), and open it whenever you
+need to recover an old conversation or continue unfinished work.
 
 ## Quick Start
 
