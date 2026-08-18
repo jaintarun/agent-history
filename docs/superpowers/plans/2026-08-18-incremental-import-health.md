@@ -466,7 +466,7 @@ git commit -m "feat: expose scan progress in health api"
 - Produces: `serviceLogWriter(fallback io.Writer) (io.Writer, io.Closer)`.
 - Consumes: `AGENT_HISTORY_LOG_PATH` only for the long-running service.
 
-- [ ] **Step 1: Write failing rotation tests**
+- [x] **Step 1: Write failing rotation tests**
 
 Add `TestRotatingWriterKeepsOneBoundedBackup` using a 32-byte limit. Write two
 24-byte records, close, and assert the first record is in `<path>.1`, the second
@@ -482,7 +482,7 @@ and an assertion that every complete record exists exactly once.
 Add `TestServiceLogWriterUsesConfiguredPath` with `t.Setenv`, write through the
 returned writer, close it, and assert the configured file received the text.
 
-- [ ] **Step 2: Run tests and verify red**
+- [x] **Step 2: Run tests and verify red**
 
 Run:
 
@@ -492,7 +492,7 @@ go test ./cmd/agent-history -run 'Test(RotatingWriter|ServiceLogWriter)' -count=
 
 Expected: compilation fails because the writer functions do not exist.
 
-- [ ] **Step 3: Implement the fixed one-backup writer**
+- [x] **Step 3: Implement the fixed one-backup writer**
 
 Use this focused shape:
 
@@ -518,7 +518,7 @@ nil. `serviceLogWriter` returns that fallback wrapper when the environment
 variable is empty or opening fails; on opening failure it writes one concise
 warning to the fallback.
 
-- [ ] **Step 4: Route the service logger and configure LaunchAgent environment**
+- [x] **Step 4: Route the service logger and configure LaunchAgent environment**
 
 In `runServe`, before constructing `slog.Logger`, call:
 
@@ -548,7 +548,7 @@ assertPlistValue(t, plistPath, "StandardErrorPath",
 	filepath.Join(home, "Library", "Logs", "agent-history.startup.log"))
 ```
 
-- [ ] **Step 5: Verify and commit**
+- [x] **Step 5: Verify and commit**
 
 Run:
 

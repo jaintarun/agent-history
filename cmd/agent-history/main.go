@@ -146,7 +146,9 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 	launcher := launch.New(database, codexSource, claudeSource)
 	engine := analyze.NewEngine(database, analyzers)
 	worker := analyze.NewWorker(database, engine, 256)
-	logger := slog.New(slog.NewTextHandler(stderr, nil))
+	logOutput, logCloser := serviceLogWriter(stderr)
+	defer logCloser.Close()
+	logger := slog.New(slog.NewTextHandler(logOutput, nil))
 	home, homeErr := os.UserHomeDir()
 	if homeErr != nil {
 		logger.Warn("could not resolve home directory for cmux hooks", "error", homeErr)

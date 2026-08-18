@@ -41,12 +41,13 @@ plistbuddy=/usr/libexec/PlistBuddy
 "$plistbuddy" -c "Add :WorkingDirectory string $repo_dir" "$tmp_plist" >/dev/null
 "$plistbuddy" -c "Add :EnvironmentVariables dict" "$tmp_plist" >/dev/null
 "$plistbuddy" -c "Add :EnvironmentVariables:PATH string $runtime_path" "$tmp_plist" >/dev/null
+"$plistbuddy" -c "Add :EnvironmentVariables:AGENT_HISTORY_LOG_PATH string $log_dir/agent-history.error.log" "$tmp_plist" >/dev/null
 "$plistbuddy" -c "Add :RunAtLoad bool true" "$tmp_plist" >/dev/null
 "$plistbuddy" -c "Add :KeepAlive bool true" "$tmp_plist" >/dev/null
 "$plistbuddy" -c "Add :ProcessType string Background" "$tmp_plist" >/dev/null
 "$plistbuddy" -c "Add :ThrottleInterval integer 15" "$tmp_plist" >/dev/null
 "$plistbuddy" -c "Add :StandardOutPath string $log_dir/agent-history.log" "$tmp_plist" >/dev/null
-"$plistbuddy" -c "Add :StandardErrorPath string $log_dir/agent-history.error.log" "$tmp_plist" >/dev/null
+"$plistbuddy" -c "Add :StandardErrorPath string $log_dir/agent-history.startup.log" "$tmp_plist" >/dev/null
 plutil -lint "$tmp_plist" >/dev/null
 
 if launchctl print "$legacy_service" >/dev/null 2>&1; then
@@ -132,7 +133,7 @@ attempts=0
 until curl -fsS http://127.0.0.1:54321/api/health >/dev/null 2>&1; do
   attempts=$((attempts + 1))
   if [ "$attempts" -ge 100 ]; then
-    printf 'Agent History was installed but did not become healthy. Check %s/agent-history.error.log\n' "$log_dir" >&2
+    printf 'Agent History was installed but did not become healthy. Check %s/agent-history.startup.log\n' "$log_dir" >&2
     exit 1
   fi
   sleep 0.1

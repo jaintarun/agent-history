@@ -105,6 +105,8 @@ exit 1
 	assertPlistValue(t, plistPath, "RunAtLoad", "true")
 	assertPlistValue(t, plistPath, "KeepAlive", "true")
 	assertPlistValue(t, plistPath, "ProgramArguments.1", filepath.Join(repoRoot, "run-local.sh"))
+	assertPlistValue(t, plistPath, "EnvironmentVariables.AGENT_HISTORY_LOG_PATH", filepath.Join(home, "Library", "Logs", "agent-history.error.log"))
+	assertPlistValue(t, plistPath, "StandardErrorPath", filepath.Join(home, "Library", "Logs", "agent-history.startup.log"))
 	if _, err := os.Stat(legacyPlist); !os.IsNotExist(err) {
 		t.Fatalf("legacy plist still exists: %v", err)
 	}
