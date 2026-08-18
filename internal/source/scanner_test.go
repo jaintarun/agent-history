@@ -159,6 +159,67 @@ func TestScannerSerializesConcurrentScans(t *testing.T) {
 	}
 }
 
+func TestScannerStatusTracksRunningAndSuccess(t *testing.T) {
+	database, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "history.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	adapter := &blockingSource{entered: make(chan struct{}, 1), release: make(chan struct{}, 1)}
+	scanner := source.NewScanner(database, adapter)
+	done := make(chan error, 1)
+	go func() { _, err := scanner.Scan(context.Background(), "codex"); done <- err }()
+
+	<-adapter.entered
+	running := scanner.Status()
+	if !running.Running || running.StartedAt.IsZero() || !running.FinishedAt.IsZero() {
+		t.Fatalf("running status = %#v", running)
+	}
+
+	adapter.release <- struct{}{}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	finished := scanner.Status()
+	if finished.Running || finished.FinishedAt.IsZero() || finished.FinishedAt.Before(finished.StartedAt) {
+		t.Fatalf("finished status = %#v", finished)
+	}
+	if finished.Duration < 0 || finished.LastError != "" {
+		t.Fatalf("finished status = %#v", finished)
+	}
+}
+
+func TestScannerStatusRecordsFailureAndPreservesLastSuccessfulReport(t *testing.T) {
+	ctx := context.Background()
+	database, err := store.Open(ctx, filepath.Join(t.TempDir(), "history.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	adapter := &statusSource{}
+	scanner := source.NewScanner(database, adapter)
+
+	report, err := scanner.Scan(ctx, "codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Discovered != 1 || report.Imported != 1 {
+		t.Fatalf("successful report = %#v", report)
+	}
+	adapter.discoverErr = errors.New("discovery failed")
+	if _, err := scanner.Scan(ctx, "codex"); err == nil {
+		t.Fatal("failed scan returned no error")
+	}
+
+	status := scanner.Status()
+	if status.LastReport != report {
+		t.Fatalf("last successful report = %#v, want %#v", status.LastReport, report)
+	}
+	if !strings.Contains(status.LastError, "discovery failed") {
+		t.Fatalf("last error = %q", status.LastError)
+	}
+}
+
 type oversizedSource struct{ read atomic.Bool }
 
 func (*oversizedSource) Name() string { return "codex" }
@@ -202,6 +263,34 @@ func (*blockingSource) Read(context.Context, source.Candidate) (source.ImportedS
 	return source.ImportedSession{}, nil
 }
 func (*blockingSource) ResumeSpec(store.Session) (source.ResumeSpec, error) {
+	return source.ResumeSpec{}, nil
+}
+
+type statusSource struct{ discoverErr error }
+
+func (*statusSource) Name() string { return "codex" }
+func (s *statusSource) Discover(context.Context) ([]source.Candidate, error) {
+	if s.discoverErr != nil {
+		return nil, s.discoverErr
+	}
+	return []source.Candidate{{
+		Agent: "codex", NativeSessionID: "status-session", Path: "/tmp/status-session.jsonl",
+		Size: 10, ModTime: time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC),
+	}}, nil
+}
+func (*statusSource) Read(_ context.Context, candidate source.Candidate) (source.ImportedSession, error) {
+	id := source.StableID("codex", candidate.NativeSessionID)
+	return source.ImportedSession{
+		Session: store.Session{
+			ID: id, Agent: "codex", NativeSessionID: candidate.NativeSessionID,
+			SourcePath: candidate.Path, SourceSize: candidate.Size, SourceMTime: candidate.ModTime,
+			SourceHash: "status-source", WorkingDirectory: "/tmp", StartedAt: candidate.ModTime,
+			LastActiveAt: candidate.ModTime, AnalysisStatus: "none",
+		},
+		Messages: []store.Message{{SessionID: id, Sequence: 0, Timestamp: candidate.ModTime, Role: "user", Text: "status"}},
+	}, nil
+}
+func (*statusSource) ResumeSpec(store.Session) (source.ResumeSpec, error) {
 	return source.ResumeSpec{}, nil
 }
 

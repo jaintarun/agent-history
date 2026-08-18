@@ -350,7 +350,7 @@ git commit -m "fix: serialize sqlite writers and bound wal"
 - Produces: optional HTTP-side `scanStatusProvider` interface.
 - Preserves: existing `httpapi.Scanner` implementations that only implement `Scan` and `Rescan`.
 
-- [ ] **Step 1: Write failing scanner lifecycle tests**
+- [x] **Step 1: Write failing scanner lifecycle tests**
 
 Use the existing blocking source to add `TestScannerStatusTracksRunningAndSuccess`:
 
@@ -373,7 +373,7 @@ successful source scan, replace/use a source whose `Discover` returns
 `errors.New("discovery failed")`, then assert `LastError` is set while
 `LastReport` remains the previous successful report.
 
-- [ ] **Step 2: Run scanner tests and verify red**
+- [x] **Step 2: Run scanner tests and verify red**
 
 Run:
 
@@ -383,7 +383,7 @@ go test ./internal/source -run 'TestScannerStatus' -count=1
 
 Expected: compilation fails because `ScanStatus` and `Status` do not exist.
 
-- [ ] **Step 3: Implement scanner status snapshots**
+- [x] **Step 3: Implement scanner status snapshots**
 
 Add:
 
@@ -403,7 +403,7 @@ to named returns. Immediately after acquiring `scanSlot`, set running state and
 defer a finalizer that records duration, finish time, error, and on success the
 new report. `Status` returns a value copy while holding `RLock`.
 
-- [ ] **Step 4: Write failing HTTP health tests**
+- [x] **Step 4: Write failing HTTP health tests**
 
 Give `fakeScanner` an optional `status source.ScanStatus` and a `Status` method.
 Add `TestHealthIncludesScanStatus` that sets a running status and asserts the
@@ -424,7 +424,7 @@ decoded response contains:
 Also construct a scanner that implements only the existing interface and prove
 the response remains exactly `{"status":"ok"}` apart from JSON whitespace.
 
-- [ ] **Step 5: Implement the optional health projection**
+- [x] **Step 5: Implement the optional health projection**
 
 Add:
 
@@ -440,7 +440,7 @@ type healthResponse struct {
 Map `time.Time` values to RFC3339 strings only when nonzero, map duration to
 milliseconds, and return the last report and error without querying SQLite.
 
-- [ ] **Step 6: Verify and commit**
+- [x] **Step 6: Verify and commit**
 
 Run:
 

@@ -50,6 +50,61 @@ func TestSecurityMiddleware(t *testing.T) {
 	}
 }
 
+func TestHealthIncludesScanStatus(t *testing.T) {
+	handler, _, scanner, _, _, _ := testHandler(t)
+	startedAt := time.Date(2026, 8, 18, 15, 0, 0, 0, time.UTC)
+	scanner.status = source.ScanStatus{
+		Running: true, StartedAt: startedAt, Duration: 1200 * time.Millisecond,
+		LastReport: source.ScanReport{Discovered: 372, Imported: 2, MetadataOnly: 1, Skipped: 369},
+	}
+
+	response := serve(handler, apiRequest(http.MethodGet, "/test-token/api/health", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("health status = %d body=%s", response.Code, response.Body.String())
+	}
+	var body struct {
+		Status string `json:"status"`
+		Scan   struct {
+			Running        bool   `json:"running"`
+			StartedAt      string `json:"started_at"`
+			LastDurationMS int64  `json:"last_duration_ms"`
+			LastReport     struct {
+				Discovered   int `json:"discovered"`
+				Imported     int `json:"imported"`
+				MetadataOnly int `json:"metadata_only"`
+				Skipped      int `json:"skipped"`
+			} `json:"last_report"`
+		} `json:"scan"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Status != "ok" || !body.Scan.Running || body.Scan.StartedAt != "2026-08-18T15:00:00Z" || body.Scan.LastDurationMS != 1200 {
+		t.Fatalf("health response = %#v", body)
+	}
+	if body.Scan.LastReport.Discovered != 372 || body.Scan.LastReport.Imported != 2 ||
+		body.Scan.LastReport.MetadataOnly != 1 || body.Scan.LastReport.Skipped != 369 {
+		t.Fatalf("health scan report = %#v", body.Scan.LastReport)
+	}
+}
+
+func TestHealthOmitsScanForLegacyScanner(t *testing.T) {
+	_, database, _, queue, launcher, _ := testHandler(t)
+	handler, err := NewHandler(Config{
+		PlainURL: true, Store: database, Scanner: legacyScanner{}, Queue: queue, Launcher: launcher,
+		AnalysisProviders: testAnalysisProviders(), AnalysisDefaults: analyze.Options{
+			Provider: "codex-cli", Model: "test", PromptVersion: "v1", NormalizerVersion: "v1",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := serve(handler, apiRequest(http.MethodGet, "/api/health", nil))
+	if got := strings.TrimSpace(response.Body.String()); got != `{"status":"ok"}` {
+		t.Fatalf("legacy health response = %s", got)
+	}
+}
+
 func TestPlainURLHandlerServesRootPaths(t *testing.T) {
 	_, database, scanner, queue, launcher, _ := testHandler(t)
 	handler, err := NewHandler(Config{
@@ -763,6 +818,7 @@ type fakeScanner struct {
 	scanAgent string
 	rescanID  string
 	panic     bool
+	status    source.ScanStatus
 }
 
 func (s *fakeScanner) Scan(_ context.Context, agent string) (source.ScanReport, error) {
@@ -776,6 +832,18 @@ func (s *fakeScanner) Scan(_ context.Context, agent string) (source.ScanReport, 
 func (s *fakeScanner) Rescan(_ context.Context, sessionID string) (store.ImportResult, error) {
 	s.rescanID = sessionID
 	return store.ImportResult{Changed: true}, nil
+}
+
+func (s *fakeScanner) Status() source.ScanStatus { return s.status }
+
+type legacyScanner struct{}
+
+func (legacyScanner) Scan(context.Context, string) (source.ScanReport, error) {
+	return source.ScanReport{}, nil
+}
+
+func (legacyScanner) Rescan(context.Context, string) (store.ImportResult, error) {
+	return store.ImportResult{}, nil
 }
 
 type queuedJob struct {

@@ -36,6 +36,10 @@ type Scanner interface {
 	Rescan(context.Context, string) (store.ImportResult, error)
 }
 
+type scanStatusProvider interface {
+	Status() source.ScanStatus
+}
+
 // AnalysisQueue is the serialized analysis boundary.
 type AnalysisQueue interface {
 	Enqueue(context.Context, string, analyze.Options) (<-chan error, error)
@@ -209,7 +213,47 @@ func (h *handler) ServeHTTP(response http.ResponseWriter, request *http.Request)
 }
 
 func (h *handler) health(response http.ResponseWriter, _ *http.Request) {
-	writeJSON(response, http.StatusOK, map[string]string{"status": "ok"})
+	result := healthResponse{Status: "ok"}
+	if provider, ok := h.scanner.(scanStatusProvider); ok {
+		status := provider.Status()
+		scan := scanHealthResponse{
+			Running: status.Running, LastDurationMS: status.Duration.Milliseconds(),
+			LastError: status.LastError,
+			LastReport: scanReportResponse{
+				Discovered: status.LastReport.Discovered, Imported: status.LastReport.Imported,
+				MetadataOnly: status.LastReport.MetadataOnly, Skipped: status.LastReport.Skipped,
+			},
+		}
+		if !status.StartedAt.IsZero() {
+			scan.StartedAt = formatAPITime(status.StartedAt)
+		}
+		if !status.FinishedAt.IsZero() {
+			scan.FinishedAt = formatAPITime(status.FinishedAt)
+		}
+		result.Scan = &scan
+	}
+	writeJSON(response, http.StatusOK, result)
+}
+
+type healthResponse struct {
+	Status string              `json:"status"`
+	Scan   *scanHealthResponse `json:"scan,omitempty"`
+}
+
+type scanHealthResponse struct {
+	Running        bool               `json:"running"`
+	StartedAt      string             `json:"started_at,omitempty"`
+	FinishedAt     string             `json:"finished_at,omitempty"`
+	LastDurationMS int64              `json:"last_duration_ms"`
+	LastReport     scanReportResponse `json:"last_report"`
+	LastError      string             `json:"last_error,omitempty"`
+}
+
+type scanReportResponse struct {
+	Discovered   int `json:"discovered"`
+	Imported     int `json:"imported"`
+	MetadataOnly int `json:"metadata_only"`
+	Skipped      int `json:"skipped"`
 }
 
 func (h *handler) searchSessions(response http.ResponseWriter, request *http.Request) {

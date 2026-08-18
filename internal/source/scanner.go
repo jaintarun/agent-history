@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/jaintarun/agent-history/internal/store"
@@ -17,11 +18,23 @@ type ScanReport struct {
 	Skipped      int
 }
 
+// ScanStatus describes the current or most recently completed full scan.
+type ScanStatus struct {
+	Running    bool
+	StartedAt  time.Time
+	FinishedAt time.Time
+	Duration   time.Duration
+	LastReport ScanReport
+	LastError  string
+}
+
 // Scanner imports normalized sessions from configured provider adapters.
 type Scanner struct {
 	store    *store.Store
 	sources  []Source
 	scanSlot chan struct{}
+	statusMu sync.RWMutex
+	status   ScanStatus
 }
 
 // Rescan reads one stored session from its current source path regardless of
@@ -69,12 +82,33 @@ func NewScanner(database *store.Store, sources ...Source) *Scanner {
 
 // Scan imports all sources matching agent. The value "all" selects every
 // configured source.
-func (s *Scanner) Scan(ctx context.Context, agent string) (ScanReport, error) {
+func (s *Scanner) Scan(ctx context.Context, agent string) (report ScanReport, err error) {
 	if err := s.acquire(ctx); err != nil {
 		return ScanReport{}, err
 	}
 	defer s.release()
-	var report ScanReport
+	startedAt := time.Now().UTC()
+	s.statusMu.Lock()
+	s.status.Running = true
+	s.status.StartedAt = startedAt
+	s.status.FinishedAt = time.Time{}
+	s.status.Duration = 0
+	s.status.LastError = ""
+	s.statusMu.Unlock()
+	defer func() {
+		finishedAt := time.Now().UTC()
+		s.statusMu.Lock()
+		s.status.Running = false
+		s.status.FinishedAt = finishedAt
+		s.status.Duration = finishedAt.Sub(startedAt)
+		if err != nil {
+			s.status.LastError = err.Error()
+		} else {
+			s.status.LastReport = report
+			s.status.LastError = ""
+		}
+		s.statusMu.Unlock()
+	}()
 	matched := false
 	for _, adapter := range s.sources {
 		if agent != "all" && agent != adapter.Name() {
@@ -117,6 +151,13 @@ func (s *Scanner) Scan(ctx context.Context, agent string) (ScanReport, error) {
 		return report, fmt.Errorf("unknown transcript agent %q", agent)
 	}
 	return report, nil
+}
+
+// Status returns a snapshot of full-scan progress and the last successful report.
+func (s *Scanner) Status() ScanStatus {
+	s.statusMu.RLock()
+	defer s.statusMu.RUnlock()
+	return s.status
 }
 
 func (s *Scanner) acquire(ctx context.Context) error {
