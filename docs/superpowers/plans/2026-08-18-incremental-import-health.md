@@ -651,7 +651,7 @@ Run one manual scan in the background with the required origin and poll
 
 Restore `analysis_auto` to its saved value after the manual scan.
 
-- [ ] **Step 6: Final commit/push and public verification**
+- [x] **Step 6: Final commit/push and public verification**
 
 If live acceptance changes only plan/spec status, commit it:
 
