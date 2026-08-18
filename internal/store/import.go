@@ -33,6 +33,11 @@ func (s *Store) SessionSourceState(ctx context.Context, agent, nativeSessionID s
 // ImportSession atomically refreshes source metadata, normalized messages, FTS
 // documents, and summary nodes invalidated by a transcript rewrite.
 func (s *Store) ImportSession(ctx context.Context, session Session, messages []Message) (ImportResult, error) {
+	if err := s.acquireWriter(ctx); err != nil {
+		return ImportResult{}, err
+	}
+	defer s.releaseWriter()
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return ImportResult{}, fmt.Errorf("begin session import: %w", err)

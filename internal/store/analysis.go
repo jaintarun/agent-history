@@ -13,6 +13,11 @@ import (
 // UpdateSessionTitle atomically updates the visible title, current root node,
 // and full-text index without regenerating any summaries.
 func (s *Store) UpdateSessionTitle(ctx context.Context, sessionID, title string) error {
+	if err := s.acquireWriter(ctx); err != nil {
+		return err
+	}
+	defer s.releaseWriter()
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin session retitle: %w", err)
@@ -128,6 +133,11 @@ func (s *Store) WeakTitleSessionIDs(ctx context.Context) ([]string, error) {
 
 // ReplaceAnalysis atomically replaces visible analysis and its summary tree.
 func (s *Store) ReplaceAnalysis(ctx context.Context, sessionID string, analysis Analysis) error {
+	if err := s.acquireWriter(ctx); err != nil {
+		return err
+	}
+	defer s.releaseWriter()
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin analysis replacement: %w", err)
@@ -191,6 +201,11 @@ func (s *Store) ReplaceAnalysis(ctx context.Context, sessionID string, analysis 
 // DeleteAnalysis removes generated data but preserves source metadata and
 // normalized messages.
 func (s *Store) DeleteAnalysis(ctx context.Context, sessionID string) error {
+	if err := s.acquireWriter(ctx); err != nil {
+		return err
+	}
+	defer s.releaseWriter()
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin analysis deletion: %w", err)
@@ -227,6 +242,11 @@ func (s *Store) DeleteAnalysis(ctx context.Context, sessionID string) error {
 
 // SetAnalysisStatus updates worker state without replacing visible analysis.
 func (s *Store) SetAnalysisStatus(ctx context.Context, sessionID, status, message string) error {
+	if err := s.acquireWriter(ctx); err != nil {
+		return err
+	}
+	defer s.releaseWriter()
+
 	result, err := s.db.ExecContext(ctx, `
         UPDATE sessions SET analysis_status = ?, analysis_error = ?, updated_at = ?
         WHERE id = ?`, status, nullableText(message), formatTime(time.Now()), sessionID)
@@ -281,6 +301,11 @@ func (s *Store) PendingAnalysisSessionIDs(ctx context.Context, includeFailed boo
 // It returns the affected session IDs so an auto-analysis caller can requeue
 // them after the transaction commits.
 func (s *Store) RecoverAnalysisStates(ctx context.Context, auto bool) ([]string, error) {
+	if err := s.acquireWriter(ctx); err != nil {
+		return nil, err
+	}
+	defer s.releaseWriter()
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("begin analysis recovery: %w", err)
@@ -333,6 +358,11 @@ func (s *Store) RecoverAnalysisStates(ctx context.Context, auto bool) ([]string,
 
 // PutSummaryNode inserts or refreshes one content-addressed summary node.
 func (s *Store) PutSummaryNode(ctx context.Context, node SummaryNode) error {
+	if err := s.acquireWriter(ctx); err != nil {
+		return err
+	}
+	defer s.releaseWriter()
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin summary node write: %w", err)
@@ -423,6 +453,11 @@ func (s *Store) SummaryNodes(ctx context.Context, sessionID, kind, provider, mod
 
 // DeleteSummaryNode removes a node and descendants linked through parent_id.
 func (s *Store) DeleteSummaryNode(ctx context.Context, id string) error {
+	if err := s.acquireWriter(ctx); err != nil {
+		return err
+	}
+	defer s.releaseWriter()
+
 	result, err := s.db.ExecContext(ctx, `DELETE FROM summary_nodes WHERE id = ?`, id)
 	if err != nil {
 		return fmt.Errorf("delete summary node: %w", err)
@@ -441,6 +476,11 @@ func (s *Store) DeleteSummaryNode(ctx context.Context, id string) error {
 // ancestor that depends on them. Unchanged siblings are detached before an
 // invalid ancestor is removed so their content-addressed results remain reusable.
 func (s *Store) InvalidateSummarySuffix(ctx context.Context, sessionID string, firstChangedSequence int) error {
+	if err := s.acquireWriter(ctx); err != nil {
+		return err
+	}
+	defer s.releaseWriter()
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin summary invalidation: %w", err)

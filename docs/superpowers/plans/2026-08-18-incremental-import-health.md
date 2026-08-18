@@ -216,7 +216,7 @@ git commit -m "perf: append only new session index rows"
 - Consumes: every public mutation method in `internal/store`.
 - Invariant: read-only methods never acquire the writer gate.
 
-- [ ] **Step 1: Write failing writer serialization tests**
+- [x] **Step 1: Write failing writer serialization tests**
 
 Add `TestStoreWriterGateSerializesPublicMutations`:
 
@@ -250,7 +250,7 @@ if err := conn.QueryRowContext(ctx, `PRAGMA journal_size_limit`).Scan(&limit); e
 if limit != 64<<20 { t.Fatalf("journal size limit = %d", limit) }
 ```
 
-- [ ] **Step 2: Run tests and verify red**
+- [x] **Step 2: Run tests and verify red**
 
 Run:
 
@@ -261,7 +261,7 @@ go test ./internal/store -run 'Test(StoreWriterGate|OpenMigrates)' -count=1
 Expected: compilation fails because the writer gate does not exist; after adding
 only method stubs, cancellation/serialization and WAL-limit assertions fail.
 
-- [ ] **Step 3: Add the writer gate and WAL pragma**
+- [x] **Step 3: Add the writer gate and WAL pragma**
 
 Change `Store` and initialization:
 
@@ -296,7 +296,7 @@ func (s *Store) acquireWriter(ctx context.Context) error {
 func (s *Store) releaseWriter() { s.writerSlot <- struct{}{} }
 ```
 
-- [ ] **Step 4: Gate every public mutation exactly once**
+- [x] **Step 4: Gate every public mutation exactly once**
 
 At the beginning of each public mutating method, before `BeginTx` or
 `ExecContext`, add:
@@ -318,7 +318,7 @@ error. Do not gate `migrate`, read methods, `putSummaryNode`,
 `insertMessageFTS` because they are private helpers called under existing
 ownership.
 
-- [ ] **Step 5: Verify store concurrency**
+- [x] **Step 5: Verify store concurrency**
 
 Run:
 
@@ -330,7 +330,7 @@ go test -race ./internal/store -count=1
 
 Expected: all pass with no races or `SQLITE_BUSY` errors.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```sh
 git add internal/store

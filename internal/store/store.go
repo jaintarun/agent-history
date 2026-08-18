@@ -26,7 +26,8 @@ var migrationFiles embed.FS
 
 // Store owns the SQLite connection pool.
 type Store struct {
-	db *sql.DB
+	db         *sql.DB
+	writerSlot chan struct{}
 }
 
 // Open opens a SQLite database, configures every connection, and applies
@@ -45,6 +46,7 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	query.Add("_pragma", "busy_timeout(5000)")
 	query.Add("_pragma", "foreign_keys(1)")
 	query.Add("_pragma", "journal_mode(WAL)")
+	query.Add("_pragma", "journal_size_limit(67108864)")
 	query.Add("_pragma", "synchronous(NORMAL)")
 	dsnURL.RawQuery = query.Encode()
 
@@ -55,7 +57,8 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	db.SetMaxOpenConns(4)
 	db.SetMaxIdleConns(4)
 	db.SetConnMaxIdleTime(5 * time.Minute)
-	store := &Store{db: db}
+	store := &Store{db: db, writerSlot: make(chan struct{}, 1)}
+	store.writerSlot <- struct{}{}
 	if err := db.PingContext(ctx); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("ping sqlite: %w", err)
@@ -65,6 +68,19 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		return nil, err
 	}
 	return store, nil
+}
+
+func (s *Store) acquireWriter(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-s.writerSlot:
+		return nil
+	}
+}
+
+func (s *Store) releaseWriter() {
+	s.writerSlot <- struct{}{}
 }
 
 // Close closes the SQLite connection pool.

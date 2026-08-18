@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"reflect"
@@ -51,11 +52,66 @@ func TestOpenMigratesEmptyDatabaseAndIsIdempotent(t *testing.T) {
 		if foreignKeys != 1 {
 			t.Fatalf("foreign keys on connection %d = %d, want 1", i, foreignKeys)
 		}
+		var journalSizeLimit int64
+		if err := conn.QueryRowContext(context.Background(), `PRAGMA journal_size_limit`).Scan(&journalSizeLimit); err != nil {
+			t.Fatalf("query journal size limit on connection %d: %v", i, err)
+		}
+		if journalSizeLimit != 64<<20 {
+			t.Fatalf("journal size limit on connection %d = %d, want %d", i, journalSizeLimit, 64<<20)
+		}
 	}
 	for _, conn := range connections {
 		if err := conn.Close(); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestStoreWriterGateSerializesPublicMutations(t *testing.T) {
+	database := openTestStore(t)
+	ctx := context.Background()
+	if err := database.acquireWriter(ctx); err != nil {
+		t.Fatal(err)
+	}
+	released := false
+	defer func() {
+		if !released {
+			database.releaseWriter()
+		}
+	}()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- database.SetSetting(ctx, "analysis.model", "queued-model")
+	}()
+	select {
+	case err := <-done:
+		t.Fatalf("writer completed while gate held: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	database.releaseWriter()
+	released = true
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestStoreWriterGateHonorsCancellation(t *testing.T) {
+	database := openTestStore(t)
+	if err := database.acquireWriter(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer database.releaseWriter()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := database.SetSetting(ctx, "analysis.model", "must-not-write"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("SetSetting error = %v, want context canceled", err)
+	}
+	if value, ok, err := database.Setting(context.Background(), "analysis.model"); err != nil {
+		t.Fatal(err)
+	} else if ok {
+		t.Fatalf("canceled setting was written as %q", value)
 	}
 }
 

@@ -41,6 +41,11 @@ type SessionIdentity struct {
 // ReplaceCmuxSnapshot atomically marks old observations closed and stores the
 // latest successful or failed cmux observation without erasing push provenance.
 func (s *Store) ReplaceCmuxSnapshot(ctx context.Context, status CmuxStatus, states []CmuxSessionState) error {
+	if err := s.acquireWriter(ctx); err != nil {
+		return err
+	}
+	defer s.releaseWriter()
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin cmux snapshot replacement: %w", err)
@@ -99,6 +104,11 @@ func (s *Store) ReplaceCmuxSnapshot(ctx context.Context, status CmuxStatus, stat
 
 // RecordCmuxPush records only nonempty targets that were successfully renamed.
 func (s *Store) RecordCmuxPush(ctx context.Context, sessionID, workspaceTitle, surfaceTitle string, pushedAt time.Time) error {
+	if err := s.acquireWriter(ctx); err != nil {
+		return err
+	}
+	defer s.releaseWriter()
+
 	if pushedAt.IsZero() {
 		pushedAt = time.Now().UTC()
 	}

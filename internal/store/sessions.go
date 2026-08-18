@@ -11,6 +11,11 @@ import (
 
 // UpsertSession inserts source metadata or refreshes the existing record.
 func (s *Store) UpsertSession(ctx context.Context, session Session) error {
+	if err := s.acquireWriter(ctx); err != nil {
+		return err
+	}
+	defer s.releaseWriter()
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin session upsert: %w", err)
@@ -69,6 +74,11 @@ func upsertSession(ctx context.Context, tx *sql.Tx, session Session) error {
 
 // ReplaceMessages atomically replaces all normalized messages for a session.
 func (s *Store) ReplaceMessages(ctx context.Context, sessionID string, messages []Message) error {
+	if err := s.acquireWriter(ctx); err != nil {
+		return err
+	}
+	defer s.releaseWriter()
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin message replacement: %w", err)
@@ -120,6 +130,11 @@ func (s *Store) GetSession(ctx context.Context, id string) (SessionDetail, error
 
 // DeleteSession removes a session and all derived records.
 func (s *Store) DeleteSession(ctx context.Context, id string) error {
+	if err := s.acquireWriter(ctx); err != nil {
+		return err
+	}
+	defer s.releaseWriter()
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin session deletion: %w", err)
@@ -271,6 +286,11 @@ func (s *Store) SetSetting(ctx context.Context, key, value string) error {
 	if err := validateSettingKey(key); err != nil {
 		return err
 	}
+	if err := s.acquireWriter(ctx); err != nil {
+		return err
+	}
+	defer s.releaseWriter()
+
 	_, err := s.db.ExecContext(ctx, `
         INSERT INTO settings(key, value, updated_at) VALUES (?, ?, ?)
         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
@@ -288,6 +308,11 @@ func (s *Store) SetSettings(ctx context.Context, values map[string]string) error
 			return err
 		}
 	}
+	if err := s.acquireWriter(ctx); err != nil {
+		return err
+	}
+	defer s.releaseWriter()
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin settings update: %w", err)

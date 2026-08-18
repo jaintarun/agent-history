@@ -9,6 +9,11 @@ import (
 // RebuildFTS deterministically regenerates all search documents from the
 // ordinary tables.
 func (s *Store) RebuildFTS(ctx context.Context) error {
+	if err := s.acquireWriter(ctx); err != nil {
+		return err
+	}
+	defer s.releaseWriter()
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin FTS rebuild: %w", err)
