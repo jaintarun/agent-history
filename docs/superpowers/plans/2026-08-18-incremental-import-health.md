@@ -611,7 +611,7 @@ git add README.md docs/superpowers/specs/2026-08-18-incremental-import-health-de
 git commit -m "docs: document runtime health operations"
 ```
 
-- [ ] **Step 4: Prevent analyzer usage during deployment restart**
+- [x] **Step 4: Prevent analyzer usage during deployment restart**
 
 Read current settings and save `analysis_auto`. If true, temporarily disable it
 through the loopback API before reinstalling:
@@ -626,7 +626,7 @@ curl -fsS -X PUT -H 'Content-Type: application/json' \
 This prevents restart recovery from spending model usage on the ten existing
 failed sessions. Restore the saved setting after live scan acceptance.
 
-- [ ] **Step 5: Deploy and validate the running service**
+- [x] **Step 5: Deploy and validate the running service**
 
 Record current lock/500 log counts, then run:
 

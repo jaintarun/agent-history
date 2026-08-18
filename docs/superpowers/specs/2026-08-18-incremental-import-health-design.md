@@ -1,7 +1,7 @@
 # Incremental Import And Runtime Health Design
 
 **Date:** 2026-08-18
-**Status:** Approved
+**Status:** Implemented
 
 ## Purpose
 
@@ -196,3 +196,17 @@ The work is complete when:
 - all repository verification commands pass; and
 - the deployed service remains responsive and records no lock or 500 errors
   during live scan acceptance.
+
+## Acceptance Results
+
+Live acceptance on 2026-08-18 used the existing 3 GB database. The first
+deployed scan discovered 373 sessions and completed in 3.082 seconds. A second
+scan completed in 5.837 seconds while 92 requests exercised health, session
+search, facets, and settings; every request returned HTTP 200, the slowest took
+23.675 ms, and health reported `scan.running=true` during the scan.
+
+`PRAGMA quick_check(1)` returned `ok`. The WAL settled at about 65 MB on disk,
+the active structured log remained below 8 MiB with no second backup, and the
+scan added no `SQLITE_BUSY`, `database is locked`, or HTTP 500 log entries.
+Automatic analysis was disabled during deployment and restored to its previous
+enabled state after acceptance.
