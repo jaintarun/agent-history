@@ -132,7 +132,7 @@ bootstrap_error=""
 attempts=0
 until curl -fsS http://127.0.0.1:54321/api/health >/dev/null 2>&1; do
   attempts=$((attempts + 1))
-  if [ "$attempts" -ge 100 ]; then
+  if [ "$attempts" -ge 600 ]; then
     printf 'Agent History was installed but did not become healthy. Check %s/agent-history.startup.log\n' "$log_dir" >&2
     exit 1
   fi

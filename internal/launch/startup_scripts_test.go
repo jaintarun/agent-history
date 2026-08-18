@@ -43,6 +43,7 @@ func TestStartupScriptsAreIdempotent(t *testing.T) {
 	}
 	logPath := filepath.Join(t.TempDir(), "launchctl.log")
 	bootstrapAttemptsPath := filepath.Join(t.TempDir(), "bootstrap-attempts")
+	healthAttemptsPath := filepath.Join(t.TempDir(), "health-attempts")
 	writeExecutable(t, filepath.Join(fakeBin, "launchctl"), `#!/bin/sh
 set -eu
 printf '%s\n' "$*" >> "$FAKE_LAUNCH_LOG"
@@ -69,10 +70,18 @@ case "$1" in
 esac
 `)
 	writeExecutable(t, filepath.Join(fakeBin, "curl"), `#!/bin/sh
+attempts=0
+if test -f "$FAKE_HEALTH_ATTEMPTS"; then attempts=$(cat "$FAKE_HEALTH_ATTEMPTS"); fi
+attempts=$((attempts + 1))
+printf '%s\n' "$attempts" > "$FAKE_HEALTH_ATTEMPTS"
+if test "$attempts" -le 101; then exit 7; fi
 printf '{"status":"ok"}\n'
 `)
 	writeExecutable(t, filepath.Join(fakeBin, "lsof"), `#!/bin/sh
 exit 1
+`)
+	writeExecutable(t, filepath.Join(fakeBin, "sleep"), `#!/bin/sh
+exit 0
 `)
 
 	environment := append(os.Environ(),
@@ -81,6 +90,7 @@ exit 1
 		"FAKE_LAUNCH_STATE_DIR="+stateDir,
 		"FAKE_LAUNCH_LOG="+logPath,
 		"FAKE_BOOTSTRAP_ATTEMPTS="+bootstrapAttemptsPath,
+		"FAKE_HEALTH_ATTEMPTS="+healthAttemptsPath,
 	)
 	legacyLabel := "com.tarunjain.agent-history"
 	legacyPlist := filepath.Join(home, "Library", "LaunchAgents", legacyLabel+".plist")
