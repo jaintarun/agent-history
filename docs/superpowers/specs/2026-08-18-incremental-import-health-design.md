@@ -128,9 +128,11 @@ server's structured logger uses a small internal rotating writer:
 - fall back to the supplied stderr writer if the log file cannot be opened.
 
 Interactive CLI runs without the environment variable continue logging to
-stderr. Launchd stdout/stderr capture remains in place for startup failures;
-ongoing structured service logs use the rotating writer. No logging framework
-or user-facing log settings are added.
+stderr. Launchd captures startup failures in
+`~/Library/Logs/agent-history.startup.log`, while ongoing structured service
+logs use the rotating writer. Separating these file descriptors prevents
+launchd from continuing to write into a file after the application renames it
+during rotation. No logging framework or user-facing log settings are added.
 
 ## Error Handling
 
