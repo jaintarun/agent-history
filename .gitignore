@@ -6,3 +6,4 @@
 *.db-wal
 *.test
 config.local.toml
+.worktrees/
