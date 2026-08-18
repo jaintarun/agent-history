@@ -53,6 +53,40 @@ function element(tag, className, text) {
   return node;
 }
 
+const actionHelpText = {
+  refresh: "Reloads sessions, selected-session details, settings, and cmux status. It does not scan transcript files or run AI.",
+  retitleWeak: "Uses AI to replace short, generic, or duplicate titles. Session summaries and topics stay unchanged.",
+  scan: "Checks all Codex and Claude transcript files and imports new or changed sessions. It does not itself run AI analysis.",
+  analyze: "Uses the selected AI provider to create this session's title, summary, and topics.",
+  reanalyze: "Uses the selected AI provider to replace this session's title, summary, and topics. Existing analysis stays if it fails.",
+  retitle: "Uses existing topic summaries to generate only a new title. It does not reread the full conversation.",
+  rescan: "Rereads this session's source transcript and imports changes. It does not run AI analysis."
+};
+let actionHelpSequence = 0;
+
+function explainAction(button, label, description) {
+  button.className = `${button.className || ""} has-action-help`.trim();
+  button.setAttribute("aria-label", label);
+  const help = element("span", "action-help");
+  const icon = element("span", "action-help-icon", "i");
+  icon.setAttribute("aria-hidden", "true");
+  const tooltip = element("span", "action-tooltip", description);
+  tooltip.id = `action-help-${button.id || ++actionHelpSequence}`;
+  tooltip.setAttribute("role", "tooltip");
+  button.setAttribute("aria-describedby", tooltip.id);
+  help.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+  });
+  help.append(icon, tooltip);
+  button.append(help);
+  return button;
+}
+
+explainAction(elements["refresh-button"], "Refresh", actionHelpText.refresh);
+explainAction(elements["retitle-weak-button"], "Retitle weak titles", actionHelpText.retitleWeak);
+explainAction(elements["scan-button"], "Scan", actionHelpText.scan);
+
 function setURLFromFilters() {
   const params = new URLSearchParams();
   for (const id of filterIDs) {
@@ -392,7 +426,8 @@ function cmuxTitleValue(label, value) {
 
 function actionButtons(session) {
   const actions = element("div", "detail-actions");
-  const analyze = element("button", "", session.analysis_status === "none" ? "Analyze" : "Reanalyze");
+  const analyzeLabel = session.analysis_status === "none" ? "Analyze" : "Reanalyze";
+  const analyze = element("button", "", analyzeLabel);
   analyze.type = "button";
   analyze.disabled = session.analysis_status === "queued" || session.analysis_status === "running";
   analyze.addEventListener("click", () => mutateSession(session.id, "/analyze", "POST", { full: session.analysis_status !== "none" }, "Analysis queued"));
@@ -403,9 +438,9 @@ function actionButtons(session) {
   const rescan = element("button", "", "Rescan");
   rescan.type = "button";
   rescan.addEventListener("click", () => mutateSession(session.id, "/rescan", "POST", {}, "Session rescanned"));
-  actions.append(analyze);
-  if (session.topics?.length) actions.append(retitle);
-  actions.append(rescan);
+  actions.append(explainAction(analyze, analyzeLabel, session.analysis_status === "none" ? actionHelpText.analyze : actionHelpText.reanalyze));
+  if (session.topics?.length) actions.append(explainAction(retitle, "Retitle", actionHelpText.retitle));
+  actions.append(explainAction(rescan, "Rescan", actionHelpText.rescan));
   if (session.agent === "codex" || session.agent === "claude") {
     const resume = element("button", "", "Resume normally");
     resume.type = "button";

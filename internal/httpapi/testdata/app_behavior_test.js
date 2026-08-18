@@ -35,8 +35,16 @@ class FakeNode {
     this.selectedOptions = [];
   }
 
-  append(...children) { this.children.push(...children); }
-  replaceChildren(...children) { this.children = children; }
+  append(...children) {
+    for (const child of children) {
+      if (child && typeof child === "object") child.parentNode = this;
+      this.children.push(child);
+    }
+  }
+  replaceChildren(...children) {
+    this.children = [];
+    this.append(...children);
+  }
   setAttribute(name, value) { this[name] = String(value); }
   addEventListener(type, listener) {
     const listeners = this.listeners.get(type) || [];
@@ -183,11 +191,52 @@ function childByText(parent, text) {
   return parent.children.find((child) => textOf(child) === text);
 }
 
+function descendant(parent, predicate) {
+  for (const child of parent.children) {
+    if (predicate(child)) return child;
+    const nested = descendant(child, predicate);
+    if (nested) return nested;
+  }
+  return undefined;
+}
+
 async function clickNode(node) {
   const event = { currentTarget: node, target: node, preventDefault() {} };
   const results = (node.listeners.get("click") || []).map((listener) => listener(event));
   await Promise.all(results);
   await settle();
+}
+
+async function clickNodeWithBubbling(node) {
+  let stopped = false;
+  const event = {
+    target: node,
+    currentTarget: node,
+    preventDefault() {},
+    stopPropagation() { stopped = true; }
+  };
+  let current = node;
+  while (current && !stopped) {
+    event.currentTarget = current;
+    const results = (current.listeners.get("click") || []).map((listener) => listener(event));
+    await Promise.all(results);
+    current = current.parentNode;
+  }
+  await settle();
+}
+
+function assertActionHelp(button, label, description) {
+  assert.ok(button, `${label} action missing`);
+  assert.match(button.className || "", /(^| )has-action-help( |$)/, `${label} help styling missing`);
+  assert.equal(button["aria-label"], label);
+  const help = descendant(button, (node) => node.className === "action-help");
+  assert.ok(help, `${label} help icon missing`);
+  const tooltip = descendant(help, (node) => node.className === "action-tooltip");
+  assert.ok(tooltip, `${label} tooltip missing`);
+  assert.equal(tooltip.role, "tooltip");
+  assert.equal(textOf(tooltip), description);
+  assert.equal(button["aria-describedby"], tooltip.id);
+  return help;
 }
 
 function session(id, analysisStatus) {
@@ -422,6 +471,41 @@ async function testAnalysisProviderSettings() {
   assert.equal(body.analysis_model, "custom-model");
 }
 
+async function testActionHelpDoesNotRunCommands() {
+  const environment = createEnvironment("off");
+  await settle();
+  const staticHelp = [
+    ["refresh-button", "Refresh", "Reloads sessions, selected-session details, settings, and cmux status. It does not scan transcript files or run AI."],
+    ["retitle-weak-button", "Retitle weak titles", "Uses AI to replace short, generic, or duplicate titles. Session summaries and topics stay unchanged."],
+    ["scan-button", "Scan", "Checks all Codex and Claude transcript files and imports new or changed sessions. It does not itself run AI analysis."]
+  ];
+  for (const [id, label, description] of staticHelp) {
+    assertActionHelp(environment.nodes[id], label, description);
+  }
+
+  const analyzed = { ...session("explained", "current"), topics: [{ title: "One topic" }] };
+  const actions = evaluate(environment, `actionButtons(${JSON.stringify(analyzed)})`);
+  const expected = [
+    ["Reanalyze", "Uses the selected AI provider to replace this session's title, summary, and topics. Existing analysis stays if it fails."],
+    ["Retitle", "Uses existing topic summaries to generate only a new title. It does not reread the full conversation."],
+    ["Rescan", "Rereads this session's source transcript and imports changes. It does not run AI analysis."]
+  ];
+  let reanalyzeHelp;
+  for (const [label, description] of expected) {
+    const button = descendant(actions, (node) => node["aria-label"] === label);
+    const help = assertActionHelp(button, label, description);
+    if (label === "Reanalyze") reanalyzeHelp = help;
+  }
+
+  const unanalyzedActions = evaluate(environment, `actionButtons(${JSON.stringify(session("new", "none"))})`);
+  const analyze = descendant(unanalyzedActions, (node) => node["aria-label"] === "Analyze");
+  assertActionHelp(analyze, "Analyze", "Uses the selected AI provider to create this session's title, summary, and topics.");
+
+  environment.requests.length = 0;
+  await clickNodeWithBubbling(reanalyzeHelp);
+  assert.equal(environment.requests.length, 0, "clicking help triggered reanalysis");
+}
+
 async function main() {
   await testStoredPreferences();
   await testDisableAndReenable();
@@ -430,6 +514,7 @@ async function main() {
   await testResumePermissionActions();
   await testSearchScopeControl();
   await testAnalysisProviderSettings();
+  await testActionHelpDoesNotRunCommands();
   process.stdout.write("browser behavior assertions passed\n");
 }
 
