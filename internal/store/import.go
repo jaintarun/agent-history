@@ -39,6 +39,10 @@ func (s *Store) ImportSession(ctx context.Context, session Session, messages []M
 	}
 	defer tx.Rollback()
 
+	previousCWD, existed, err := importSessionState(ctx, tx, session.ID)
+	if err != nil {
+		return ImportResult{}, err
+	}
 	previous, err := messagesInTx(ctx, tx, session.ID)
 	if err != nil {
 		return ImportResult{}, err
@@ -48,19 +52,34 @@ func (s *Store) ImportSession(ctx context.Context, session Session, messages []M
 	if err := upsertSession(ctx, tx, session); err != nil {
 		return ImportResult{}, err
 	}
-	if changed {
+	appendOnly := existed && previousCWD == session.WorkingDirectory &&
+		firstChanged == len(previous) && len(messages) > len(previous)
+	switch {
+	case !changed:
+		if !existed || previousCWD != session.WorkingDirectory {
+			if err := rebuildSessionFTS(ctx, tx, session.ID); err != nil {
+				return ImportResult{}, err
+			}
+		}
+	case appendOnly:
+		if err := insertMessages(ctx, tx, session.ID, messages[firstChanged:]); err != nil {
+			return ImportResult{}, err
+		}
+		if err := insertMessageFTS(ctx, tx, session.ID, session.WorkingDirectory, messages[firstChanged:]); err != nil {
+			return ImportResult{}, err
+		}
+	default:
 		if _, err := tx.ExecContext(ctx, `DELETE FROM messages WHERE session_id = ?`, session.ID); err != nil {
 			return ImportResult{}, fmt.Errorf("delete imported messages: %w", err)
 		}
-		for _, message := range messages {
-			if _, err := tx.ExecContext(ctx, `
-                INSERT INTO messages(session_id, sequence, timestamp, role, text, tool_name)
-                VALUES (?, ?, ?, ?, ?, ?)`, session.ID, message.Sequence,
-				formatTime(message.Timestamp), message.Role, message.Text,
-				nullableText(message.ToolName)); err != nil {
-				return ImportResult{}, fmt.Errorf("insert imported message %d: %w", message.Sequence, err)
-			}
+		if err := insertMessages(ctx, tx, session.ID, messages); err != nil {
+			return ImportResult{}, err
 		}
+		if err := rebuildSessionFTS(ctx, tx, session.ID); err != nil {
+			return ImportResult{}, err
+		}
+	}
+	if changed {
 		if err := invalidateSummarySuffix(ctx, tx, session.ID, firstChanged); err != nil {
 			return ImportResult{}, err
 		}
@@ -72,13 +91,37 @@ func (s *Store) ImportSession(ctx context.Context, session Session, messages []M
 			return ImportResult{}, fmt.Errorf("mark changed analysis partial: %w", err)
 		}
 	}
-	if err := rebuildSessionFTS(ctx, tx, session.ID); err != nil {
-		return ImportResult{}, err
-	}
 	if err := tx.Commit(); err != nil {
 		return ImportResult{}, fmt.Errorf("commit session import: %w", err)
 	}
 	return ImportResult{Changed: changed, FirstChangedSequence: firstChanged}, nil
+}
+
+func importSessionState(ctx context.Context, tx *sql.Tx, sessionID string) (string, bool, error) {
+	var cwd string
+	err := tx.QueryRowContext(ctx,
+		`SELECT working_directory FROM sessions WHERE id = ?`, sessionID,
+	).Scan(&cwd)
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("read import session state: %w", err)
+	}
+	return cwd, true, nil
+}
+
+func insertMessages(ctx context.Context, tx *sql.Tx, sessionID string, messages []Message) error {
+	for _, message := range messages {
+		if _, err := tx.ExecContext(ctx, `
+            INSERT INTO messages(session_id, sequence, timestamp, role, text, tool_name)
+            VALUES (?, ?, ?, ?, ?, ?)`, sessionID, message.Sequence,
+			formatTime(message.Timestamp), message.Role, message.Text,
+			nullableText(message.ToolName)); err != nil {
+			return fmt.Errorf("insert imported message %d: %w", message.Sequence, err)
+		}
+	}
+	return nil
 }
 
 func messagesInTx(ctx context.Context, tx *sql.Tx, sessionID string) ([]Message, error) {

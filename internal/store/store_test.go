@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -304,6 +305,154 @@ func TestFTSUpdatesDeletesAndRebuilds(t *testing.T) {
 	assertFTSCount(t, store, "different", 1)
 }
 
+func TestImportSessionAppendPreservesExistingRows(t *testing.T) {
+	database := openTestStore(t)
+	ctx := context.Background()
+	session := testSession("append-session")
+	initial := []Message{
+		{Sequence: 0, Timestamp: session.StartedAt, Role: "user", Text: "original alpha"},
+		{Sequence: 1, Timestamp: session.LastActiveAt, Role: "assistant", Text: "original beta"},
+	}
+	if _, err := database.ImportSession(ctx, session, initial); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ImportSession(ctx, testSession("rowid-sentinel"), []Message{{
+		Sequence: 0, Timestamp: session.StartedAt, Role: "user", Text: "sentinel",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	messageRows, ftsRows := storedRowIDs(t, database, session.ID)
+
+	appended := append(append([]Message(nil), initial...), Message{
+		Sequence: 2, Timestamp: session.LastActiveAt.Add(time.Minute),
+		Role: "user", Text: "new zircon suffix",
+	})
+	session.SourceSize++
+	session.SourceMTime = session.SourceMTime.Add(time.Minute)
+	session.SourceHash = "appended"
+	result, err := database.ImportSession(ctx, session, appended)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Changed || result.FirstChangedSequence != 2 {
+		t.Fatalf("result = %#v", result)
+	}
+
+	messageRowsAfter, ftsRowsAfter := storedRowIDs(t, database, session.ID)
+	for sequence, rowID := range messageRows {
+		if messageRowsAfter[sequence] != rowID {
+			t.Errorf("message %d rowid = %d, want preserved %d", sequence, messageRowsAfter[sequence], rowID)
+		}
+	}
+	for key, rowID := range ftsRows {
+		if ftsRowsAfter[key] != rowID {
+			t.Errorf("FTS %s rowid = %d, want preserved %d", key, ftsRowsAfter[key], rowID)
+		}
+	}
+	assertFTSCount(t, database, "zircon", 1)
+}
+
+func TestImportSessionMetadataOnlyPreservesFTSRows(t *testing.T) {
+	database := openTestStore(t)
+	ctx := context.Background()
+	session := testSession("metadata-session")
+	messages := []Message{{
+		Sequence: 0, Timestamp: session.StartedAt, Role: "user", Text: "stable metadata text",
+	}}
+	if _, err := database.ImportSession(ctx, session, messages); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ImportSession(ctx, testSession("metadata-sentinel"), []Message{{
+		Sequence: 0, Timestamp: session.StartedAt, Role: "user", Text: "sentinel",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	messageRows, ftsRows := storedRowIDs(t, database, session.ID)
+
+	session.SourceSize++
+	session.SourceMTime = session.SourceMTime.Add(time.Minute)
+	session.SourceHash = "metadata-only"
+	session.LastActiveAt = session.LastActiveAt.Add(time.Minute)
+	result, err := database.ImportSession(ctx, session, messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Changed {
+		t.Fatalf("metadata-only result = %#v", result)
+	}
+	messageRowsAfter, ftsRowsAfter := storedRowIDs(t, database, session.ID)
+	if !reflect.DeepEqual(messageRowsAfter, messageRows) {
+		t.Errorf("message rowids changed: before=%v after=%v", messageRows, messageRowsAfter)
+	}
+	if !reflect.DeepEqual(ftsRowsAfter, ftsRows) {
+		t.Errorf("FTS rowids changed: before=%v after=%v", ftsRows, ftsRowsAfter)
+	}
+}
+
+func TestImportSessionAppendWithWorkingDirectoryChangeRefreshesFTS(t *testing.T) {
+	database := openTestStore(t)
+	ctx := context.Background()
+	session := testSession("moved-session")
+	initial := []Message{{
+		Sequence: 0, Timestamp: session.StartedAt, Role: "user", Text: "move the project",
+	}}
+	if _, err := database.ImportSession(ctx, session, initial); err != nil {
+		t.Fatal(err)
+	}
+	session.WorkingDirectory = "/tmp/moved-project"
+	session.SourceHash = "moved-and-appended"
+	session.SourceMTime = session.SourceMTime.Add(time.Minute)
+	appended := append(append([]Message(nil), initial...), Message{
+		Sequence: 1, Timestamp: session.LastActiveAt, Role: "assistant", Text: "project moved",
+	})
+	if _, err := database.ImportSession(ctx, session, appended); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := database.db.Query(
+		`SELECT DISTINCT working_directory FROM session_fts WHERE session_id = ?`, session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var directories []string
+	for rows.Next() {
+		var directory string
+		if err := rows.Scan(&directory); err != nil {
+			t.Fatal(err)
+		}
+		directories = append(directories, directory)
+	}
+	if !reflect.DeepEqual(directories, []string{session.WorkingDirectory}) {
+		t.Fatalf("FTS working directories = %v, want %q", directories, session.WorkingDirectory)
+	}
+}
+
+func TestImportSessionRewriteRemovesStaleText(t *testing.T) {
+	database := openTestStore(t)
+	ctx := context.Background()
+	session := testSession("rewrite-session")
+	initial := []Message{
+		{Sequence: 0, Timestamp: session.StartedAt, Role: "user", Text: "obsolete chrysanthemum"},
+		{Sequence: 1, Timestamp: session.LastActiveAt, Role: "assistant", Text: "unchanged response"},
+	}
+	if _, err := database.ImportSession(ctx, session, initial); err != nil {
+		t.Fatal(err)
+	}
+	rewritten := append([]Message(nil), initial...)
+	rewritten[0].Text = "replacement marigold"
+	session.SourceHash = "rewritten"
+	session.SourceMTime = session.SourceMTime.Add(time.Minute)
+	result, err := database.ImportSession(ctx, session, rewritten)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Changed || result.FirstChangedSequence != 0 {
+		t.Fatalf("rewrite result = %#v", result)
+	}
+	assertFTSCount(t, database, "chrysanthemum", 0)
+	assertFTSCount(t, database, "marigold", 1)
+}
+
 func TestSummaryNodeCacheIdentityAndCascade(t *testing.T) {
 	store := openTestStore(t)
 	session := testSession("session-nodes")
@@ -583,6 +732,52 @@ func openTestStore(t *testing.T) *Store {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	return store
+}
+
+func storedRowIDs(t *testing.T, database *Store, sessionID string) (map[int]int64, map[string]int64) {
+	t.Helper()
+	messageRows := make(map[int]int64)
+	rows, err := database.db.Query(`SELECT sequence, rowid FROM messages WHERE session_id = ?`, sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var sequence int
+		var rowID int64
+		if err := rows.Scan(&sequence, &rowID); err != nil {
+			rows.Close()
+			t.Fatal(err)
+		}
+		messageRows[sequence] = rowID
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+
+	ftsRows := make(map[string]int64)
+	rows, err = database.db.Query(`SELECT document_key, rowid FROM session_fts WHERE session_id = ?`, sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var key string
+		var rowID int64
+		if err := rows.Scan(&key, &rowID); err != nil {
+			rows.Close()
+			t.Fatal(err)
+		}
+		ftsRows[key] = rowID
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return messageRows, ftsRows
 }
 
 func intPointer(value int) *int {

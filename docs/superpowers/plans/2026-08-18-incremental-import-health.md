@@ -37,7 +37,7 @@
 - Produces: `insertMessageFTS(context.Context, *sql.Tx, string, string, []Message) error`.
 - Invariant: only `rebuildSessionFTS` deletes pre-existing FTS rows, and append-only imports never call it.
 
-- [ ] **Step 1: Write failing row-preservation tests**
+- [x] **Step 1: Write failing row-preservation tests**
 
 Add helpers in `internal/store/store_test.go` that query stable ordinary and FTS rowids:
 
@@ -112,7 +112,7 @@ Add `TestImportSessionRewriteRemovesStaleText` by changing sequence `0`, then
 assert the old FTS term is absent, the replacement term is present, and the old
 message/FTS rowids are not required to survive.
 
-- [ ] **Step 2: Run the focused tests and verify red**
+- [x] **Step 2: Run the focused tests and verify red**
 
 Run:
 
@@ -123,7 +123,7 @@ go test ./internal/store -run 'TestImportSession(Append|Metadata|Rewrite)' -coun
 Expected: append and metadata tests fail because `ImportSession` currently
 deletes and reinserts all message and FTS rows.
 
-- [ ] **Step 3: Implement import classification and suffix insertion**
+- [x] **Step 3: Implement import classification and suffix insertion**
 
 Read the existing session's working directory and existence before `upsertSession`:
 
@@ -180,7 +180,7 @@ For new sessions, use the full path so the session FTS document is created.
 Run the existing summary invalidation and partial-status update for both append
 and rewrite paths, but not metadata-only imports.
 
-- [ ] **Step 4: Verify focused and store behavior**
+- [x] **Step 4: Verify focused and store behavior**
 
 Run:
 
@@ -193,7 +193,7 @@ go test ./internal/source -run 'TestCodexScanIsIdempotentAndInvalidatesOnlyChang
 Expected: all pass; the source test still proves summary-prefix reuse and
 rewrite invalidation.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```sh
 git add internal/store/import.go internal/store/fts.go internal/store/store_test.go

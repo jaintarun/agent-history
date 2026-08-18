@@ -74,18 +74,14 @@ func rebuildSessionFTS(ctx context.Context, tx *sql.Tx, sessionID string) error 
 		return fmt.Errorf("read messages for FTS: %w", err)
 	}
 	for rows.Next() {
-		var sequence int
-		var role, text, toolName string
-		if err := rows.Scan(&sequence, &role, &text, &toolName); err != nil {
+		var message Message
+		if err := rows.Scan(&message.Sequence, &message.Role, &message.Text, &message.ToolName); err != nil {
 			rows.Close()
 			return fmt.Errorf("scan message for FTS: %w", err)
 		}
-		if _, err := tx.ExecContext(ctx, `
-            INSERT INTO session_fts(session_id, document_key, document_type, title, body, working_directory)
-            VALUES (?, printf('message:%d', ?), ?, ?, ?, ?)`,
-			sessionID, sequence, "message", toolName, text, cwd); err != nil {
+		if err := insertMessageFTSRow(ctx, tx, sessionID, cwd, message); err != nil {
 			rows.Close()
-			return fmt.Errorf("index message %d: %w", sequence, err)
+			return err
 		}
 	}
 	if err := rows.Close(); err != nil {
@@ -121,6 +117,25 @@ func rebuildSessionFTS(ctx context.Context, tx *sql.Tx, sessionID string) error 
 	}
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("read segments for FTS: %w", err)
+	}
+	return nil
+}
+
+func insertMessageFTS(ctx context.Context, tx *sql.Tx, sessionID, cwd string, messages []Message) error {
+	for _, message := range messages {
+		if err := insertMessageFTSRow(ctx, tx, sessionID, cwd, message); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func insertMessageFTSRow(ctx context.Context, tx *sql.Tx, sessionID, cwd string, message Message) error {
+	if _, err := tx.ExecContext(ctx, `
+        INSERT INTO session_fts(session_id, document_key, document_type, title, body, working_directory)
+        VALUES (?, printf('message:%d', ?), 'message', ?, ?, ?)`,
+		sessionID, message.Sequence, message.ToolName, message.Text, cwd); err != nil {
+		return fmt.Errorf("index message %d: %w", message.Sequence, err)
 	}
 	return nil
 }
