@@ -572,7 +572,7 @@ git commit -m "feat: rotate launch agent service logs"
   incremental performance behavior.
 - Deploys: the committed LaunchAgent at `http://127.0.0.1:54321/`.
 
-- [ ] **Step 1: Update operator documentation**
+- [x] **Step 1: Update operator documentation**
 
 Add a concise **Runtime Health** README section containing:
 
@@ -588,7 +588,7 @@ search, and the UI remain available during background scanning.
 Change the spec status from `Approved` to `Implemented` only after all live
 acceptance checks pass. Mark plan checkboxes as work completes.
 
-- [ ] **Step 2: Run complete repository verification**
+- [x] **Step 2: Run complete repository verification**
 
 Run:
 
@@ -604,7 +604,7 @@ git diff --check
 
 Expected: every command exits zero. Do not deploy on a partial pass.
 
-- [ ] **Step 3: Commit implementation documentation**
+- [x] **Step 3: Commit implementation documentation**
 
 ```sh
 git add README.md docs/superpowers/specs/2026-08-18-incremental-import-health-design.md docs/superpowers/plans/2026-08-18-incremental-import-health.md

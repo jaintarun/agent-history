@@ -202,10 +202,31 @@ duplicate jobs. Logs are written to:
 ```text
 ~/Library/Logs/agent-history.log
 ~/Library/Logs/agent-history.error.log
+~/Library/Logs/agent-history.error.log.1
+~/Library/Logs/agent-history.startup.log
 ```
+
+The structured service log rotates at 8 MiB and retains one `.1` backup. The
+other two files contain only launchd-managed stdout and startup errors.
 
 The uninstaller is also idempotent. It stops automatic startup but keeps the
 repository, configuration, imported conversations, summaries, and database.
+
+## Runtime Health
+
+Normal transcript growth inserts only new message and search-index rows. The
+UI, search, and cmux integration remain available while the serialized
+background scan processes updates. Inspect current scan progress and follow the
+bounded structured log with:
+
+```sh
+curl http://127.0.0.1:54321/api/health | jq
+tail -f ~/Library/Logs/agent-history.error.log
+```
+
+The health response reports scan state under `.scan`, including timestamps,
+duration, last successful totals, and the latest scan error. SQLite retains at
+most 64 MiB of reusable WAL data after checkpoints.
 
 ## cmux Integration
 
