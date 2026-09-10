@@ -1,0 +1,28 @@
+[
+  {
+    "sequence": 0,
+    "timestamp": "2026-09-01T10:00:00Z",
+    "role": "user",
+    "text": "Implement Grok history import."
+  },
+  {
+    "sequence": 1,
+    "timestamp": "2026-09-01T10:00:10Z",
+    "role": "tool",
+    "text": "bash {\"command\":\"go test ./...\"}",
+    "tool_name": "bash"
+  },
+  {
+    "sequence": 2,
+    "timestamp": "2026-09-01T10:00:20Z",
+    "role": "tool",
+    "text": "tests pass",
+    "tool_name": "bash"
+  },
+  {
+    "sequence": 3,
+    "timestamp": "2026-09-01T10:00:30Z",
+    "role": "assistant",
+    "text": "Imported visible messages."
+  }
+]

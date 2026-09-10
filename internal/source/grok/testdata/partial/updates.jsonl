@@ -1,0 +1,3 @@
+{"method":"session/update","timestamp":1788256800,"params":{"sessionId":"01a00000-0000-7000-8000-000000000002","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"Keep the complete records."}}}}
+{"method":"session/update","timestamp":1788256830,"params":{"sessionId":"01a00000-0000-7000-8000-000000000002","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"The complete records remain."}}}}
+{"method":"session/update","timestamp":1788256831,"params":{"sessionId":"01a00000-0000-7000-8000-000000000002","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text"
