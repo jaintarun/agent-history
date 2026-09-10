@@ -34,8 +34,8 @@ func TestOpenMigratesEmptyDatabaseAndIsIdempotent(t *testing.T) {
 	if err := second.db.QueryRow(`SELECT count(*) FROM schema_migrations`).Scan(&migrations); err != nil {
 		t.Fatalf("query migrations: %v", err)
 	}
-	if migrations != 2 {
-		t.Fatalf("migration count = %d, want 2", migrations)
+	if migrations != 3 {
+		t.Fatalf("migration count = %d, want 3", migrations)
 	}
 
 	var connections []*sql.Conn
@@ -64,6 +64,81 @@ func TestOpenMigratesEmptyDatabaseAndIsIdempotent(t *testing.T) {
 		if err := conn.Close(); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestGrokMigrationPreservesExistingSessionData(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "history.db")
+	legacy, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := legacy.Exec(`PRAGMA foreign_keys = ON`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := legacy.Exec(`CREATE TABLE schema_migrations (
+		version INTEGER PRIMARY KEY,
+		name TEXT NOT NULL,
+		applied_at TEXT NOT NULL
+	)`); err != nil {
+		t.Fatal(err)
+	}
+	for version, name := range []string{"001_initial.sql", "002_cmux_state.sql"} {
+		migration, err := migrationFiles.ReadFile("migrations/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := legacy.Exec(string(migration)); err != nil {
+			t.Fatalf("apply legacy migration %s: %v", name, err)
+		}
+		if _, err := legacy.Exec(`INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)`,
+			version+1, name, "2026-09-01T00:00:00Z"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := legacy.Exec(`INSERT INTO sessions(
+		id, agent, native_session_id, source_path, source_size, source_mtime,
+		source_hash, working_directory, started_at, last_active_at,
+		analysis_status, created_at, updated_at
+	) VALUES ('old', 'codex', 'native-old', '/tmp/old', 1, '2026-09-01T00:00:00Z',
+		'hash', '/tmp', '2026-09-01T00:00:00Z', '2026-09-01T01:00:00Z',
+		'none', '2026-09-01T00:00:00Z', '2026-09-01T01:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := legacy.Exec(`INSERT INTO messages(session_id, sequence, timestamp, role, text)
+		VALUES ('old', 0, '2026-09-01T00:00:00Z', 'user', 'preserved message')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := legacy.Exec(`INSERT INTO cmux_session_state(session_id, observed_at)
+		VALUES ('old', '2026-09-01T01:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	database, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	detail, err := database.GetSession(ctx, "old")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(detail.Messages) != 1 || detail.Messages[0].Text != "preserved message" {
+		t.Fatalf("migrated messages = %#v", detail.Messages)
+	}
+	if _, ok, err := database.CmuxState(ctx, "old"); err != nil || !ok {
+		t.Fatalf("migrated cmux state exists = %v, error = %v", ok, err)
+	}
+
+	grok := testSession("grok-session")
+	grok.Agent = "grok"
+	grok.NativeSessionID = "01a00000-0000-7000-8000-000000000001"
+	if err := database.UpsertSession(ctx, grok); err != nil {
+		t.Fatalf("insert Grok session after migration: %v", err)
 	}
 }
 

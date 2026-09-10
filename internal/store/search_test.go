@@ -246,6 +246,31 @@ func TestSearchRejectsInvalidOptions(t *testing.T) {
 	}
 }
 
+func TestSearchFiltersGrokSessions(t *testing.T) {
+	database := searchFixture(t)
+	ctx := context.Background()
+	session := Session{
+		ID: "grok-session", Agent: "grok", NativeSessionID: "grok-native",
+		SourcePath: "/tmp/grok", SourceSize: 1,
+		SourceMTime:      time.Date(2026, 9, 1, 10, 0, 0, 0, time.UTC),
+		SourceHash:       "grok-hash",
+		WorkingDirectory: "/work/grok",
+		StartedAt:        time.Date(2026, 9, 1, 10, 0, 0, 0, time.UTC),
+		LastActiveAt:     time.Date(2026, 9, 1, 11, 0, 0, 0, time.UTC),
+	}
+	if err := database.UpsertSession(ctx, session); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := database.SearchSessions(ctx, SearchQuery{Agent: "grok"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Hits) != 1 || result.Hits[0].Session.ID != session.ID {
+		t.Fatalf("Grok search result = %#v", result.Hits)
+	}
+}
+
 func TestSearchSessionsFiltersCmuxOpenAndClosed(t *testing.T) {
 	database := searchFixture(t)
 	ctx := context.Background()

@@ -390,7 +390,7 @@ func validateSearchQuery(query SearchQuery) error {
 	if len(query.CWD) > 4096 {
 		return errors.New("cwd filter exceeds 4096 characters")
 	}
-	if query.Agent != "" && query.Agent != "codex" && query.Agent != "claude" {
+	if query.Agent != "" && query.Agent != "codex" && query.Agent != "claude" && query.Agent != "grok" {
 		return fmt.Errorf("invalid agent %q", query.Agent)
 	}
 	if query.TopicMode != "" && query.TopicMode != "focused" && query.TopicMode != "multiple" {
