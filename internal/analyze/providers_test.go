@@ -5,6 +5,12 @@ import (
 	"testing"
 )
 
+func TestDefaultCodexModelUsesCurrentFastSubscriptionModel(t *testing.T) {
+	if DefaultCodexModel != "gpt-5.6-luna" {
+		t.Fatalf("DefaultCodexModel = %q", DefaultCodexModel)
+	}
+}
+
 func TestDiscoverCLIProviders(t *testing.T) {
 	for _, test := range []struct {
 		name      string

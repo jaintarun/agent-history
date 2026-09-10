@@ -134,7 +134,7 @@ searched, which keeps results focused.
 
 | Provider | Invocation | Default model | Authentication |
 | --- | --- | --- | --- |
-| Codex | `codex exec` | `gpt-5.4-mini` | Existing Codex CLI login |
+| Codex | `codex exec` | `gpt-5.6-luna` | Existing Codex CLI login |
 | Claude Code | `claude -p` | `haiku` | Existing Claude Code login |
 
 Grok is deliberately absent from this table: it is a transcript source and
@@ -316,7 +316,7 @@ Automated tests use fake provider executables and never consume model usage.
 Quality evaluation is separate and explicitly acknowledged:
 
 ```sh
-./agent-history eval --model gpt-5.4-mini --allow-provider-usage
+./agent-history eval --model gpt-5.6-luna --allow-provider-usage
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md),

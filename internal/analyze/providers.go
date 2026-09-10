@@ -3,7 +3,7 @@ package analyze
 const (
 	ProviderCodexCLI   = "codex-cli"
 	ProviderClaudeCLI  = "claude-cli"
-	DefaultCodexModel  = "gpt-5.4-mini"
+	DefaultCodexModel  = "gpt-5.6-luna"
 	DefaultClaudeModel = "haiku"
 )
 

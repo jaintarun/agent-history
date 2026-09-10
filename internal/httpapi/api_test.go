@@ -700,7 +700,7 @@ func TestSettingsAreValidatedAndNeverExposeSecrets(t *testing.T) {
 	}
 	decodeResponse(t, response, &initial)
 	if len(initial.Providers) != 2 ||
-		initial.Providers[0].ID != "codex-cli" || initial.Providers[0].DefaultModel != "gpt-5.4-mini" || !initial.Providers[0].Available ||
+		initial.Providers[0].ID != "codex-cli" || initial.Providers[0].DefaultModel != "gpt-5.6-luna" || !initial.Providers[0].Available ||
 		initial.Providers[1].ID != "claude-cli" || initial.Providers[1].Name != "Claude Code" ||
 		initial.Providers[1].DefaultModel != "haiku" || initial.Providers[1].Available {
 		t.Fatalf("provider catalog = %#v", initial.Providers)
@@ -965,7 +965,7 @@ func testHandler(t *testing.T) (http.Handler, *store.Store, *fakeScanner, *fakeQ
 
 func testAnalysisProviders() []analyze.Provider {
 	return []analyze.Provider{
-		{ID: "codex-cli", Name: "Codex", DefaultModel: "gpt-5.4-mini", Available: true},
+		{ID: "codex-cli", Name: "Codex", DefaultModel: "gpt-5.6-luna", Available: true},
 		{ID: "claude-cli", Name: "Claude Code", DefaultModel: "haiku", Available: false},
 	}
 }

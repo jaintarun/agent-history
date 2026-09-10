@@ -239,14 +239,14 @@ func TestPreferredAnalysisUsesInstalledCLI(t *testing.T) {
 		provider      string
 		model         string
 	}{
-		{name: "both", codex: true, claude: true, provider: "codex-cli", model: "gpt-5.4-mini"},
-		{name: "codex", codex: true, provider: "codex-cli", model: "gpt-5.4-mini"},
+		{name: "both", codex: true, claude: true, provider: "codex-cli", model: "gpt-5.6-luna"},
+		{name: "codex", codex: true, provider: "codex-cli", model: "gpt-5.6-luna"},
 		{name: "claude", claude: true, provider: "claude-cli", model: "haiku"},
-		{name: "neither", provider: "codex-cli", model: "gpt-5.4-mini"},
+		{name: "neither", provider: "codex-cli", model: "gpt-5.6-luna"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			providers := []analyze.Provider{
-				{ID: "codex-cli", DefaultModel: "gpt-5.4-mini", Available: test.codex},
+				{ID: "codex-cli", DefaultModel: "gpt-5.6-luna", Available: test.codex},
 				{ID: "claude-cli", DefaultModel: "haiku", Available: test.claude},
 			}
 			got := preferredAnalysis(providers)
@@ -259,7 +259,7 @@ func TestPreferredAnalysisUsesInstalledCLI(t *testing.T) {
 
 func TestConfiguredAnalysisUsesProviderDefaultAndValidatesInput(t *testing.T) {
 	providers := []analyze.Provider{
-		{ID: "codex-cli", DefaultModel: "gpt-5.4-mini", Available: true},
+		{ID: "codex-cli", DefaultModel: "gpt-5.6-luna", Available: true},
 		{ID: "claude-cli", DefaultModel: "haiku", Available: true},
 	}
 	for _, test := range []struct {

@@ -413,7 +413,7 @@ model:
 ```toml
 [analysis]
 provider = "codex-cli"
-model = "gpt-5.4-mini"
+model = "gpt-5.6-luna"
 auto = true
 ```
 

@@ -103,7 +103,7 @@ function createEnvironment(storedPreference, search = "") {
         return Promise.resolve(fakeResponse({
           analysis_provider: "codex-cli", analysis_model: "test", analysis_auto: false,
           analysis_providers: [
-            { id: "codex-cli", name: "Codex", default_model: "gpt-5.4-mini", available: true },
+            { id: "codex-cli", name: "Codex", default_model: "gpt-5.6-luna", available: true },
             { id: "claude-cli", name: "Claude Code", default_model: "haiku", available: false }
           ],
           cmux_title_sync: false, cmux_available: true, cmux_access_mode: "allowAll",
@@ -455,7 +455,7 @@ async function testAnalysisProviderSettings() {
   assert.equal(textOf(provider.children[1]), "Claude Code (Not installed)");
   assert.equal(provider.children[1].disabled, true);
 
-  environment.nodes["settings-model"].value = "gpt-5.4-mini";
+  environment.nodes["settings-model"].value = "gpt-5.6-luna";
   provider.value = "claude-cli";
   await dispatch(environment, "settings-provider", "change");
   assert.equal(environment.nodes["settings-model"].value, "haiku");
