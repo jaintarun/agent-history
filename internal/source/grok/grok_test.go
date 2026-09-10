@@ -59,6 +59,32 @@ func TestReadIgnoresIncompleteFinalUpdate(t *testing.T) {
 	}
 }
 
+func TestParseUpdatesDropsRewoundBranch(t *testing.T) {
+	input := strings.Join([]string{
+		`{"method":"session/update","timestamp":1788256800,"params":{"update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"keep prompt"},"_meta":{"promptIndex":0}}}}`,
+		`{"method":"session/update","timestamp":1788256801,"params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"keep response"}}}}`,
+		`{"method":"session/update","timestamp":1788256802,"params":{"update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"discarded prompt"},"_meta":{"promptIndex":1}}}}`,
+		`{"method":"session/update","timestamp":1788256803,"params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"discarded response"}}}}`,
+		`{"method":"_x.ai/session/update","timestamp":1788256804,"params":{"update":{"sessionUpdate":"rewind_marker","target_prompt_index":1}}}`,
+		`{"method":"session/update","timestamp":1788256805,"params":{"update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"replacement prompt"},"_meta":{"promptIndex":1}}}}`,
+		`{"method":"session/update","timestamp":1788256806,"params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"replacement response"}}}}`,
+	}, "\n")
+
+	messages, err := parseUpdates(context.Background(), strings.NewReader(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"keep prompt", "keep response", "replacement prompt", "replacement response"}
+	if len(messages) != len(want) {
+		t.Fatalf("messages = %#v, want texts %q", messages, want)
+	}
+	for i, message := range messages {
+		if message.Text != want[i] || message.Sequence != i {
+			t.Fatalf("message %d = %#v, want text %q and sequence %d", i, message, want[i], i)
+		}
+	}
+}
+
 func TestDiscoverFindsOnlyTopLevelSessionUpdates(t *testing.T) {
 	home := t.TempDir()
 	mainDir := filepath.Join(home, "sessions", "%2FUsers%2Fexample%2Fwork", "01a00000-0000-7000-8000-000000000001")

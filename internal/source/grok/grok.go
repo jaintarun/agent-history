@@ -176,15 +176,18 @@ type envelope struct {
 }
 
 type update struct {
-	SessionUpdate string          `json:"sessionUpdate"`
-	Content       json.RawMessage `json:"content"`
-	ToolCallID    string          `json:"toolCallId"`
-	Title         string          `json:"title"`
-	Status        string          `json:"status"`
-	RawInput      json.RawMessage `json:"rawInput"`
-	RawOutput     json.RawMessage `json:"rawOutput"`
-	Meta          struct {
+	SessionUpdate     string          `json:"sessionUpdate"`
+	Content           json.RawMessage `json:"content"`
+	ToolCallID        string          `json:"toolCallId"`
+	Title             string          `json:"title"`
+	Status            string          `json:"status"`
+	RawInput          json.RawMessage `json:"rawInput"`
+	RawOutput         json.RawMessage `json:"rawOutput"`
+	TargetPromptIndex *int            `json:"target_prompt_index"`
+	Meta              struct {
 		HideFromScrollback bool `json:"hideFromScrollback"`
+		HostTurn           bool `json:"hostTurn"`
+		PromptIndex        *int `json:"promptIndex"`
 		Tool               struct {
 			Name string `json:"name"`
 		} `json:"x.ai/tool"`
@@ -200,6 +203,7 @@ type contentBlock struct {
 func parseUpdates(ctx context.Context, input io.Reader) ([]store.Message, error) {
 	reader := bufio.NewReader(input)
 	var messages []store.Message
+	var rewinds rewindTracker
 	toolNames := make(map[string]string)
 	completedTools := make(map[string]bool)
 	for lineNumber := 1; ; lineNumber++ {
@@ -213,6 +217,7 @@ func parseUpdates(ctx context.Context, input io.Reader) ([]store.Message, error)
 				}
 				return nil, fmt.Errorf("decode line %d: %w", lineNumber, err)
 			}
+			rewinds.observe(record, &messages)
 			if err := consumeUpdate(&messages, toolNames, completedTools, record); err != nil {
 				return nil, fmt.Errorf("line %d: %w", lineNumber, err)
 			}
@@ -228,6 +233,58 @@ func parseUpdates(ctx context.Context, input io.Reader) ([]store.Message, error)
 		}
 	}
 	return messages, nil
+}
+
+type rewindTracker struct {
+	promptStarts       []int
+	seenPromptIndex    bool
+	inUser             bool
+	currentPromptIndex *int
+}
+
+func (r *rewindTracker) observe(record envelope, messages *[]store.Message) {
+	update := record.Params.Update
+	if record.Method == "_x.ai/session/update" && update.SessionUpdate == "rewind_marker" && update.TargetPromptIndex != nil {
+		target := *update.TargetPromptIndex
+		if target >= 0 && target < len(r.promptStarts) {
+			*messages = (*messages)[:r.promptStarts[target]]
+			r.promptStarts = r.promptStarts[:target]
+		}
+		r.endUserRun()
+		return
+	}
+	if record.Method != "session/update" || update.SessionUpdate != "user_message_chunk" || update.Meta.HostTurn {
+		r.endUserRun()
+		return
+	}
+	if r.startsPrompt(update.Meta.PromptIndex) {
+		r.promptStarts = append(r.promptStarts, len(*messages))
+	}
+}
+
+func (r *rewindTracker) startsPrompt(promptIndex *int) bool {
+	if promptIndex != nil {
+		r.seenPromptIndex = true
+	}
+	counts := !r.seenPromptIndex || promptIndex != nil
+	newRun := !r.inUser
+	if r.inUser && (r.seenPromptIndex || promptIndex != nil) {
+		newRun = !sameIndex(promptIndex, r.currentPromptIndex)
+	}
+	if newRun {
+		r.currentPromptIndex = promptIndex
+	}
+	r.inUser = true
+	return newRun && counts
+}
+
+func (r *rewindTracker) endUserRun() {
+	r.inUser = false
+	r.currentPromptIndex = nil
+}
+
+func sameIndex(left, right *int) bool {
+	return left == nil && right == nil || left != nil && right != nil && *left == *right
 }
 
 func consumeUpdate(messages *[]store.Message, toolNames map[string]string, completedTools map[string]bool, record envelope) error {
