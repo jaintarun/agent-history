@@ -20,6 +20,8 @@ type Candidate struct {
 	Size            int64
 	ModTime         time.Time
 	Archived        bool
+	// Excluded removes a previously imported provider-internal session.
+	Excluded bool
 }
 
 // ImportedSession is one completely parsed provider transcript.

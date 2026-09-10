@@ -3,6 +3,7 @@ package source_test
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 	"github.com/jaintarun/agent-history/internal/source"
 	"github.com/jaintarun/agent-history/internal/source/claude"
 	"github.com/jaintarun/agent-history/internal/source/codex"
+	"github.com/jaintarun/agent-history/internal/source/grok"
 	"github.com/jaintarun/agent-history/internal/store"
 
 	_ "modernc.org/sqlite"
@@ -109,6 +111,85 @@ func TestCodexScanIsIdempotentAndInvalidatesOnlyChangedSuffix(t *testing.T) {
 	}
 	if _, err := database.FindSummaryNode(ctx, cacheKey(node)); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("rewritten prefix node error = %v, want not found", err)
+	}
+}
+
+func TestGrokScanRemovesPreviouslyImportedSubagentSessions(t *testing.T) {
+	ctx := context.Background()
+	home := t.TempDir()
+	updates, err := os.ReadFile(filepath.Join("grok", "testdata", "basic", "updates.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessions := []struct {
+		id   string
+		kind string
+	}{
+		{id: "01a00000-0000-7000-8000-000000000010", kind: "parent"},
+		{id: "01a00000-0000-7000-8000-000000000011", kind: "subagent"},
+		{id: "01a00000-0000-7000-8000-000000000012", kind: "subagent_resume"},
+		{id: "01a00000-0000-7000-8000-000000000013", kind: "subagent_fork"},
+	}
+	for _, session := range sessions {
+		directory := filepath.Join(home, "sessions", "%2FUsers%2Fexample%2Fwork", session.id)
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(directory, "updates.jsonl"), updates, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		writeGrokSummary(t, directory, session.id, "")
+	}
+
+	database, err := store.Open(ctx, filepath.Join(t.TempDir(), "history.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	scanner := source.NewScanner(database, grok.New(home))
+	if report, err := scanner.Scan(ctx, "grok"); err != nil {
+		t.Fatal(err)
+	} else if report.Imported != len(sessions) {
+		t.Fatalf("initial report = %#v", report)
+	}
+
+	for _, session := range sessions {
+		directory := filepath.Join(home, "sessions", "%2FUsers%2Fexample%2Fwork", session.id)
+		writeGrokSummary(t, directory, session.id, session.kind)
+	}
+	if _, err := scanner.Scan(ctx, "grok"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := database.GetSession(ctx, source.StableID("grok", sessions[0].id)); err != nil {
+		t.Fatalf("parent session was removed: %v", err)
+	}
+	for _, session := range sessions[1:] {
+		if _, err := database.GetSession(ctx, source.StableID("grok", session.id)); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("%s session lookup error = %v, want not found", session.kind, err)
+		}
+	}
+}
+
+func writeGrokSummary(t *testing.T, directory, id, kind string) {
+	t.Helper()
+	summary := map[string]any{
+		"created_at":     "2026-09-01T09:59:00Z",
+		"last_active_at": "2026-09-01T10:01:00Z",
+		"info": map[string]any{
+			"id":  id,
+			"cwd": "/Users/example/work/grok-project",
+		},
+	}
+	if kind != "" {
+		summary["session_kind"] = kind
+	}
+	content, err := json.Marshal(summary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "summary.json"), content, 0o600); err != nil {
+		t.Fatal(err)
 	}
 }
 

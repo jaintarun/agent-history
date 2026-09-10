@@ -211,9 +211,9 @@ The first adapters are:
 - `codex`: active and archived rollout JSONL records under `CODEX_HOME` or
   `~/.codex`.
 - `claude`: project JSONL records under `CLAUDE_CONFIG_DIR` or `~/.claude`.
-- `grok`: top-level ACP update streams under `GROK_HOME` or `~/.grok/sessions`.
-  Nested subagent streams and events removed by Grok rewind markers are not
-  imported.
+- `grok`: main ACP update streams under `GROK_HOME` or `~/.grok/sessions`.
+  Grok stores child histories beside main sessions, so streams whose metadata
+  marks them as subagents and events removed by rewind markers are not imported.
 
 Discovery records path, size, modification time, and native session ID. An
 unchanged file is skipped. A changed file is parsed completely and its messages

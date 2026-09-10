@@ -465,12 +465,13 @@ cmux integration beyond the optional launcher.
 
 ### Work
 
-- Discover top-level Grok Build `updates.jsonl` streams under `GROK_HOME` or
+- Discover main Grok Build `updates.jsonl` streams under `GROK_HOME` or
   `~/.grok/sessions` and read session identity, cwd, and timestamps from the
   adjacent `summary.json`.
 - Normalize visible user and assistant text plus bounded completed tool facts.
 - Exclude thought chunks, hidden scrollback, hooks, recaps, plans, transport
-  events, nested subagent streams, and incomplete trailing JSONL records.
+  events, sibling sessions marked as subagents, nested subagent streams, and
+  incomplete trailing JSONL records.
 - Apply Grok rewind markers so abandoned conversation branches never enter
   SQLite, FTS, or analyzer input.
 - Extend the schema, scanner, source filter, cmux hook matching, and embedded UI

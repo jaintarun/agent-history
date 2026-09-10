@@ -159,6 +159,38 @@ func (s *Store) DeleteSession(ctx context.Context, id string) error {
 	return nil
 }
 
+// DeleteSessions removes a set of sessions and all derived records atomically.
+func (s *Store) DeleteSessions(ctx context.Context, ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	if err := s.acquireWriter(ctx); err != nil {
+		return err
+	}
+	defer s.releaseWriter()
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin session batch deletion: %w", err)
+	}
+	defer tx.Rollback()
+	arguments := make([]any, len(ids))
+	for i, id := range ids {
+		arguments[i] = id
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
+	if _, err := tx.ExecContext(ctx, `DELETE FROM session_fts WHERE session_id IN (`+placeholders+`)`, arguments...); err != nil {
+		return fmt.Errorf("delete session batch FTS: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE id IN (`+placeholders+`)`, arguments...); err != nil {
+		return fmt.Errorf("delete session batch: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit session batch deletion: %w", err)
+	}
+	return nil
+}
+
 const sessionSelect = `SELECT
     id, agent, native_session_id, source_path, source_size, source_mtime,
     source_hash, working_directory, title, summary, topic_count,

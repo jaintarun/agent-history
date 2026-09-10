@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -183,6 +184,34 @@ func TestReconcilerMatchesOnlyExactOpenSessions(t *testing.T) {
 	}
 	if state, ok, err := database.CmuxState(context.Background(), "claude-session"); err != nil || ok && state.Open {
 		t.Fatalf("stale Claude state = %#v, %v, %v", state, ok, err)
+	}
+}
+
+func TestReconcilerSelectsCurrentMappingAfterIgnoringUnimportedSubagent(t *testing.T) {
+	database := openReconcilerStore(t)
+	upsertAnalyzedSession(t, database, "main-session", "grok", "main-native", "Main session", "current")
+	home := t.TempDir()
+	writeHookFixture(t, home, "grok", fmt.Sprintf(`{
+  "sessions": {
+    "main": {"sessionId":"main-native","workspaceId":"w1","surfaceId":"s1","agentLifecycle":"running","pid":%d,"updatedAt":200},
+    "subagent": {"sessionId":"subagent-native","workspaceId":"w1","surfaceId":"s1","agentLifecycle":"running","pid":%d,"updatedAt":300}
+  }
+}`, os.Getpid(), os.Getpid()))
+	api := &fakeAPI{
+		capabilities: Capabilities{AccessMode: "allowAll"},
+		workspaces:   []Workspace{{ID: "w1", Title: "Grok cmux"}},
+		surfaces:     map[string][]Surface{"w1": {{ID: "s1", Title: "Grok tab"}}},
+	}
+
+	if err := NewReconciler(api, database, home, slog.Default()).RefreshWithoutSync(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	state, ok, err := database.CmuxState(context.Background(), "main-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || !state.Open || state.WorkspaceID != "w1" || state.SurfaceID != "s1" {
+		t.Fatalf("main cmux state = %#v, %v", state, ok)
 	}
 }
 

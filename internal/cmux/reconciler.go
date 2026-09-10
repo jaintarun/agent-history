@@ -154,6 +154,7 @@ func (r *Reconciler) snapshotLocked(ctx context.Context) (liveSnapshot, error) {
 	for _, identity := range identities {
 		identityByNative[identity.Agent+"\x00"+identity.NativeSessionID] = identity.SessionID
 	}
+	mappings = selectCurrentHookMappings(mappings, identityByNative)
 	snapshot := liveSnapshot{
 		states:              make(map[string]store.CmuxSessionState),
 		sessionsInWorkspace: make(map[string]int),

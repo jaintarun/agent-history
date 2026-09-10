@@ -1,6 +1,7 @@
 package cmux
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -55,6 +56,51 @@ func TestLoadHookMappingsKeepsNewestValidMappingAndIsolatesMalformedAgent(t *tes
 	}
 	if len(diagnostics) != 1 || !strings.Contains(diagnostics[0].Error(), "codex") {
 		t.Fatalf("diagnostics = %v", diagnostics)
+	}
+}
+
+func TestLoadHookMappingsKeepsExplicitlyActiveSessionPerAgentSurface(t *testing.T) {
+	home := t.TempDir()
+	writeHookFixture(t, home, "grok", `{
+  "activeSessionsBySurface": {
+    "s1": {"sessionId":"current","updatedAt":200}
+  },
+  "sessions": {
+    "current": {"sessionId":"current","workspaceId":"w1","surfaceId":"s1","agentLifecycle":"idle","updatedAt":200},
+    "stale": {"sessionId":"stale","workspaceId":"w1","surfaceId":"s1","agentLifecycle":"running","updatedAt":300}
+  }
+}`)
+
+	mappings, diagnostics := LoadHookMappings(home)
+	if len(diagnostics) != 0 {
+		t.Fatalf("diagnostics = %v", diagnostics)
+	}
+	mappings = selectCurrentHookMappings(mappings, map[string]string{
+		"grok\x00current": "current", "grok\x00stale": "stale",
+	})
+	if len(mappings) != 1 || mappings[0].NativeSessionID != "current" || mappings[0].Lifecycle != "idle" {
+		t.Fatalf("mappings = %#v", mappings)
+	}
+}
+
+func TestLoadHookMappingsPrefersLiveProcessWithoutActiveMarker(t *testing.T) {
+	home := t.TempDir()
+	writeHookFixture(t, home, "grok", fmt.Sprintf(`{
+  "sessions": {
+    "current": {"sessionId":"current","workspaceId":"w1","surfaceId":"s1","agentLifecycle":"idle","pid":%d,"updatedAt":200},
+    "stale": {"sessionId":"stale","workspaceId":"w1","surfaceId":"s1","agentLifecycle":"running","pid":99999999,"updatedAt":300}
+  }
+}`, os.Getpid()))
+
+	mappings, diagnostics := LoadHookMappings(home)
+	if len(diagnostics) != 0 {
+		t.Fatalf("diagnostics = %v", diagnostics)
+	}
+	mappings = selectCurrentHookMappings(mappings, map[string]string{
+		"grok\x00current": "current", "grok\x00stale": "stale",
+	})
+	if len(mappings) != 1 || mappings[0].NativeSessionID != "current" || mappings[0].Lifecycle != "idle" {
+		t.Fatalf("mappings = %#v", mappings)
 	}
 }
 

@@ -111,7 +111,7 @@ model in **Settings**, then use **Scan** or wait for the background scanner.
 - Discovers Claude Code project transcripts under `CLAUDE_CONFIG_DIR` or
   `~/.claude/projects`; nested subagent transcripts are excluded.
 - Discovers Grok Build session updates under `GROK_HOME` or `~/.grok/sessions`;
-  nested subagent streams and rewound conversation branches are excluded.
+  sessions marked as subagents and rewound conversation branches are excluded.
 - Removes private reasoning, thinking blocks, system/developer instructions,
   injected instruction envelopes, and transport metadata before persistence.
 - Stores visible user/assistant text and bounded useful tool facts in SQLite.

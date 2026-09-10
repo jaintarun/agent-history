@@ -231,6 +231,40 @@ func TestReplaceMessagesIsAtomicAndForeignKeysCascade(t *testing.T) {
 	}
 }
 
+func TestDeleteSessionsRemovesSeveralIDsAndIgnoresMissingIDs(t *testing.T) {
+	ctx := context.Background()
+	database := openTestStore(t)
+	removed := testSession("removed")
+	retained := testSession("retained")
+	for _, session := range []Session{removed, retained} {
+		if err := database.UpsertSession(ctx, session); err != nil {
+			t.Fatal(err)
+		}
+		if err := database.ReplaceMessages(ctx, session.ID, []Message{{
+			Sequence: 0, Timestamp: session.StartedAt, Role: "user", Text: session.ID,
+		}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := database.DeleteSessions(ctx, []string{removed.ID, "not-imported"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.GetSession(ctx, removed.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("removed session lookup error = %v, want not found", err)
+	}
+	if _, err := database.GetSession(ctx, retained.ID); err != nil {
+		t.Fatalf("retained session lookup error = %v", err)
+	}
+	var ftsRows int
+	if err := database.db.QueryRow(`SELECT count(*) FROM session_fts WHERE session_id = ?`, removed.ID).Scan(&ftsRows); err != nil {
+		t.Fatal(err)
+	}
+	if ftsRows != 0 {
+		t.Fatalf("removed session FTS rows = %d, want 0", ftsRows)
+	}
+}
+
 func TestReplaceAnalysisIsAtomicAndDeletePreservesMessages(t *testing.T) {
 	store := openTestStore(t)
 	session := testSession("session-analysis")

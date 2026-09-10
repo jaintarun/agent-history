@@ -81,6 +81,7 @@ func (a *Adapter) Discover(ctx context.Context) ([]source.Candidate, error) {
 		candidate := source.Candidate{
 			Agent: "grok", NativeSessionID: meta.ID, Path: path,
 			Size: info.Size(), ModTime: info.ModTime().UTC(),
+			Excluded: strings.HasPrefix(strings.ToLower(strings.TrimSpace(meta.SessionKind)), "subagent"),
 		}
 		current, exists := byID[meta.ID]
 		if !exists || candidate.ModTime.After(current.ModTime) {
@@ -177,6 +178,7 @@ func (a *Adapter) ResumeSpec(session store.Session) (source.ResumeSpec, error) {
 type metadata struct {
 	ID           string
 	CWD          string
+	SessionKind  string
 	CreatedAt    time.Time
 	LastActiveAt time.Time
 }
@@ -446,6 +448,7 @@ func readMetadata(path string) (metadata, error) {
 	var summary struct {
 		CreatedAt    string `json:"created_at"`
 		LastActiveAt string `json:"last_active_at"`
+		SessionKind  string `json:"session_kind"`
 		Info         struct {
 			ID  string `json:"id"`
 			CWD string `json:"cwd"`
@@ -465,7 +468,10 @@ func readMetadata(path string) (metadata, error) {
 	if err != nil {
 		return metadata{}, fmt.Errorf("parse last_active_at: %w", err)
 	}
-	return metadata{ID: summary.Info.ID, CWD: summary.Info.CWD, CreatedAt: createdAt, LastActiveAt: lastActiveAt}, nil
+	return metadata{
+		ID: summary.Info.ID, CWD: summary.Info.CWD, SessionKind: summary.SessionKind,
+		CreatedAt: createdAt, LastActiveAt: lastActiveAt,
+	}, nil
 }
 
 func parseTime(value string) (time.Time, error) {

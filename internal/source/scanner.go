@@ -120,7 +120,20 @@ func (s *Scanner) Scan(ctx context.Context, agent string) (report ScanReport, er
 			return report, fmt.Errorf("discover %s sessions: %w", adapter.Name(), err)
 		}
 		report.Discovered += len(candidates)
+		var excludedIDs []string
 		for _, candidate := range candidates {
+			if candidate.Excluded {
+				excludedIDs = append(excludedIDs, StableID(adapter.Name(), candidate.NativeSessionID))
+			}
+		}
+		if err := s.store.DeleteSessions(ctx, excludedIDs); err != nil {
+			return report, fmt.Errorf("remove excluded %s sessions: %w", adapter.Name(), err)
+		}
+		for _, candidate := range candidates {
+			if candidate.Excluded {
+				report.Skipped++
+				continue
+			}
 			if candidate.Size < 0 || candidate.Size > MaxTranscriptBytes {
 				return report, fmt.Errorf("%s transcript %q size %d exceeds %d bytes", adapter.Name(), candidate.Path, candidate.Size, MaxTranscriptBytes)
 			}
