@@ -125,11 +125,18 @@ func (a *Adapter) Read(ctx context.Context, candidate source.Candidate) (source.
 	}
 	startedAt, lastActiveAt := meta.CreatedAt, meta.LastActiveAt
 	if len(messages) != 0 {
-		startedAt = messages[0].Timestamp
-		lastActiveAt = messages[len(messages)-1].Timestamp
+		if startedAt.IsZero() || messages[0].Timestamp.Before(startedAt) {
+			startedAt = messages[0].Timestamp
+		}
+		lastMessageAt := messages[len(messages)-1].Timestamp
+		if lastActiveAt.IsZero() || lastMessageAt.After(lastActiveAt) {
+			lastActiveAt = lastMessageAt
+		}
 	}
 	if startedAt.IsZero() {
 		startedAt = candidate.ModTime.UTC()
+	}
+	if lastActiveAt.IsZero() || lastActiveAt.Before(startedAt) {
 		lastActiveAt = startedAt
 	}
 	sessionID := source.StableID("grok", meta.ID)
@@ -200,11 +207,17 @@ type contentBlock struct {
 	Content json.RawMessage `json:"content"`
 }
 
+type pendingTool struct {
+	Timestamp time.Time
+	Name      string
+	Text      string
+}
+
 func parseUpdates(ctx context.Context, input io.Reader) ([]store.Message, error) {
 	reader := bufio.NewReader(input)
 	var messages []store.Message
 	var rewinds rewindTracker
-	toolNames := make(map[string]string)
+	pendingTools := make(map[string]pendingTool)
 	completedTools := make(map[string]bool)
 	for lineNumber := 1; ; lineNumber++ {
 		line, readErr := source.ReadJSONLRecord(reader)
@@ -217,8 +230,11 @@ func parseUpdates(ctx context.Context, input io.Reader) ([]store.Message, error)
 				}
 				return nil, fmt.Errorf("decode line %d: %w", lineNumber, err)
 			}
-			rewinds.observe(record, &messages)
-			if err := consumeUpdate(&messages, toolNames, completedTools, record); err != nil {
+			if rewinds.observe(record, &messages) {
+				clear(pendingTools)
+				clear(completedTools)
+			}
+			if err := consumeUpdate(&messages, pendingTools, completedTools, record); err != nil {
 				return nil, fmt.Errorf("line %d: %w", lineNumber, err)
 			}
 		}
@@ -242,24 +258,27 @@ type rewindTracker struct {
 	currentPromptIndex *int
 }
 
-func (r *rewindTracker) observe(record envelope, messages *[]store.Message) {
+func (r *rewindTracker) observe(record envelope, messages *[]store.Message) bool {
 	update := record.Params.Update
 	if record.Method == "_x.ai/session/update" && update.SessionUpdate == "rewind_marker" && update.TargetPromptIndex != nil {
 		target := *update.TargetPromptIndex
 		if target >= 0 && target < len(r.promptStarts) {
 			*messages = (*messages)[:r.promptStarts[target]]
 			r.promptStarts = r.promptStarts[:target]
+			r.endUserRun()
+			return true
 		}
 		r.endUserRun()
-		return
+		return false
 	}
 	if record.Method != "session/update" || update.SessionUpdate != "user_message_chunk" || update.Meta.HostTurn {
 		r.endUserRun()
-		return
+		return false
 	}
 	if r.startsPrompt(update.Meta.PromptIndex) {
 		r.promptStarts = append(r.promptStarts, len(*messages))
 	}
+	return false
 }
 
 func (r *rewindTracker) startsPrompt(promptIndex *int) bool {
@@ -287,8 +306,8 @@ func sameIndex(left, right *int) bool {
 	return left == nil && right == nil || left != nil && right != nil && *left == *right
 }
 
-func consumeUpdate(messages *[]store.Message, toolNames map[string]string, completedTools map[string]bool, record envelope) error {
-	if record.Method != "session/update" && record.Method != "_x.ai/session/update" {
+func consumeUpdate(messages *[]store.Message, pendingTools map[string]pendingTool, completedTools map[string]bool, record envelope) error {
+	if record.Method != "session/update" || record.Params.Update.Meta.HideFromScrollback || record.Params.Update.Meta.HostTurn {
 		return nil
 	}
 	if record.Timestamp <= 0 {
@@ -308,16 +327,19 @@ func consumeUpdate(messages *[]store.Message, toolNames map[string]string, compl
 			appendMessage(messages, timestamp, "assistant", text, "")
 		}
 	case "tool_call":
+		if record.Params.Update.ToolCallID == "" {
+			return nil
+		}
 		toolName := strings.TrimSpace(record.Params.Update.Meta.Tool.Name)
 		if toolName == "" {
 			toolName = "tool"
 		}
-		if record.Params.Update.ToolCallID != "" {
-			toolNames[record.Params.Update.ToolCallID] = toolName
-		}
 		text := strings.TrimSpace(toolName + " " + rawText(record.Params.Update.RawInput))
-		if text != toolName {
-			appendMessage(messages, timestamp, "tool", boundToolText(text), toolName)
+		if text == toolName {
+			text = ""
+		}
+		pendingTools[record.Params.Update.ToolCallID] = pendingTool{
+			Timestamp: timestamp, Name: toolName, Text: boundToolText(text),
 		}
 	case "tool_call_update":
 		if record.Params.Update.Status != "completed" && record.Params.Update.Status != "failed" {
@@ -326,17 +348,23 @@ func consumeUpdate(messages *[]store.Message, toolNames map[string]string, compl
 		if record.Params.Update.ToolCallID != "" && completedTools[record.Params.Update.ToolCallID] {
 			return nil
 		}
-		text := toolResultText(record.Params.Update.RawOutput, record.Params.Update.Content)
-		if text == "" {
-			return nil
+		pending := pendingTools[record.Params.Update.ToolCallID]
+		toolName := pending.Name
+		if toolName == "" {
+			toolName = strings.TrimSpace(record.Params.Update.Meta.Tool.Name)
 		}
-		toolName := toolNames[record.Params.Update.ToolCallID]
 		if toolName == "" {
 			toolName = "tool"
 		}
-		appendMessage(messages, timestamp, "tool", boundToolText(text), toolName)
+		if pending.Text != "" {
+			appendMessage(messages, pending.Timestamp, "tool", pending.Text, toolName)
+		}
+		if text := toolResultText(record.Params.Update.RawOutput, record.Params.Update.Content); text != "" {
+			appendMessage(messages, timestamp, "tool", boundToolText(text), toolName)
+		}
 		if record.Params.Update.ToolCallID != "" {
 			completedTools[record.Params.Update.ToolCallID] = true
+			delete(pendingTools, record.Params.Update.ToolCallID)
 		}
 	}
 	return nil

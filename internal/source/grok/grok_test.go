@@ -27,6 +27,12 @@ func TestReadNormalizesVisibleUpdates(t *testing.T) {
 	if imported.Session.WorkingDirectory != "/Users/example/work/grok-project" {
 		t.Fatalf("cwd = %q", imported.Session.WorkingDirectory)
 	}
+	if got := imported.Session.StartedAt.Format(time.RFC3339); got != "2026-09-01T09:59:00Z" {
+		t.Fatalf("started at = %q", got)
+	}
+	if got := imported.Session.LastActiveAt.Format(time.RFC3339); got != "2026-09-01T10:01:00Z" {
+		t.Fatalf("last active at = %q", got)
+	}
 	got, err := json.MarshalIndent(goldenMessages(imported.Messages), "", "  ")
 	if err != nil {
 		t.Fatal(err)
@@ -82,6 +88,74 @@ func TestParseUpdatesDropsRewoundBranch(t *testing.T) {
 		if message.Text != want[i] || message.Sequence != i {
 			t.Fatalf("message %d = %#v, want text %q and sequence %d", i, message, want[i], i)
 		}
+	}
+}
+
+func TestParseUpdatesExcludesInternalHiddenAndHostUpdates(t *testing.T) {
+	input := strings.Join([]string{
+		`{"method":"session/update","timestamp":1788256800,"params":{"update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"visible user"}}}}`,
+		`{"method":"_x.ai/session/update","timestamp":1788256801,"params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"internal assistant"}}}}`,
+		`{"method":"session/update","timestamp":1788256802,"params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"hidden assistant"},"_meta":{"hideFromScrollback":true}}}}`,
+		`{"method":"session/update","timestamp":1788256803,"params":{"update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"host user"},"_meta":{"hostTurn":true}}}}`,
+		`{"method":"session/update","timestamp":1788256804,"params":{"update":{"sessionUpdate":"tool_call","toolCallId":"hidden-tool","rawInput":{"command":"private command"},"_meta":{"hideFromScrollback":true,"x.ai/tool":{"name":"bash"}}}}}`,
+		`{"method":"session/update","timestamp":1788256805,"params":{"update":{"sessionUpdate":"tool_call_update","toolCallId":"hidden-tool","status":"completed","rawOutput":{"output_for_prompt":"private output"},"_meta":{"hideFromScrollback":true}}}}`,
+		`{"method":"_x.ai/session/update","timestamp":1788256806,"params":{"update":{"sessionUpdate":"tool_call_update","toolCallId":"internal-tool","status":"completed","rawOutput":{"output_for_prompt":"internal output"}}}}`,
+		`{"method":"session/update","timestamp":1788256807,"params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"visible assistant"}}}}`,
+	}, "\n")
+
+	messages, err := parseUpdates(context.Background(), strings.NewReader(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 2 || messages[0].Text != "visible user" || messages[1].Text != "visible assistant" {
+		t.Fatalf("messages = %#v", messages)
+	}
+}
+
+func TestParseUpdatesRequiresTerminalToolUpdate(t *testing.T) {
+	input := strings.Join([]string{
+		`{"method":"session/update","timestamp":1788256800,"params":{"update":{"sessionUpdate":"tool_call","toolCallId":"unfinished","rawInput":{"command":"do not retain"},"_meta":{"x.ai/tool":{"name":"bash"}}}}}`,
+		`{"method":"session/update","timestamp":1788256801,"params":{"update":{"sessionUpdate":"tool_call","toolCallId":"finished","rawInput":{"command":"retain"},"_meta":{"x.ai/tool":{"name":"bash"}}}}}`,
+		`{"method":"session/update","timestamp":1788256802,"params":{"update":{"sessionUpdate":"tool_call_update","toolCallId":"finished","status":"completed","rawOutput":{"output_for_prompt":"done"}}}}`,
+	}, "\n")
+
+	messages, err := parseUpdates(context.Background(), strings.NewReader(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 2 || !strings.Contains(messages[0].Text, "retain") || messages[1].Text != "done" {
+		t.Fatalf("messages = %#v", messages)
+	}
+	for _, message := range messages {
+		if strings.Contains(message.Text, "do not retain") {
+			t.Fatalf("unfinished tool call was retained: %#v", messages)
+		}
+	}
+}
+
+func TestParseUpdatesResetsToolStateOnRewind(t *testing.T) {
+	input := strings.Join([]string{
+		`{"method":"session/update","timestamp":1788256800,"params":{"update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"keep"},"_meta":{"promptIndex":0}}}}`,
+		`{"method":"session/update","timestamp":1788256801,"params":{"update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"discard"},"_meta":{"promptIndex":1}}}}`,
+		`{"method":"session/update","timestamp":1788256802,"params":{"update":{"sessionUpdate":"tool_call","toolCallId":"reused","rawInput":{"command":"discard"},"_meta":{"x.ai/tool":{"name":"bash"}}}}}`,
+		`{"method":"session/update","timestamp":1788256803,"params":{"update":{"sessionUpdate":"tool_call_update","toolCallId":"reused","status":"completed","rawOutput":{"output_for_prompt":"discard"}}}}`,
+		`{"method":"_x.ai/session/update","timestamp":1788256804,"params":{"update":{"sessionUpdate":"rewind_marker","target_prompt_index":1}}}`,
+		`{"method":"session/update","timestamp":1788256805,"params":{"update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"replacement"},"_meta":{"promptIndex":1}}}}`,
+		`{"method":"session/update","timestamp":1788256806,"params":{"update":{"sessionUpdate":"tool_call","toolCallId":"reused","rawInput":{"command":"replacement"},"_meta":{"x.ai/tool":{"name":"bash"}}}}}`,
+		`{"method":"session/update","timestamp":1788256807,"params":{"update":{"sessionUpdate":"tool_call_update","toolCallId":"reused","status":"completed","rawOutput":{"output_for_prompt":"replacement result"}}}}`,
+	}, "\n")
+
+	messages, err := parseUpdates(context.Background(), strings.NewReader(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	serialized, err := json.Marshal(messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(serialized)
+	if strings.Contains(got, `"text":"discard"`) || !strings.Contains(got, "replacement result") {
+		t.Fatalf("messages after rewind = %s", got)
 	}
 }
 
