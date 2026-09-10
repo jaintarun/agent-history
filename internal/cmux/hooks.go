@@ -30,12 +30,12 @@ type hookFile struct {
 	} `json:"sessions"`
 }
 
-// LoadHookMappings loads independent Claude and Codex hook stores. Missing
+// LoadHookMappings loads independent Claude, Codex, and Grok hook stores. Missing
 // files are normal; malformed files are isolated as per-agent diagnostics.
 func LoadHookMappings(home string) ([]HookMapping, []error) {
 	var diagnostics []error
 	newest := make(map[string]HookMapping)
-	for _, agent := range []string{"claude", "codex"} {
+	for _, agent := range []string{"claude", "codex", "grok"} {
 		path := filepath.Join(home, ".cmuxterm", agent+"-hook-sessions.json")
 		content, err := os.ReadFile(path)
 		if errors.Is(err, os.ErrNotExist) {

@@ -385,6 +385,11 @@ async function testResumePermissionActions() {
       agent: "claude",
       bypassLabel: "Resume with dangerously skipped permissions",
       absentLabel: "Resume with YOLO"
+    },
+    {
+      agent: "grok",
+      bypassLabel: "Resume with YOLO",
+      absentLabel: "Resume with dangerously skipped permissions"
     }
   ]) {
     const sourceSession = { ...session("resume", "current"), agent: test.agent };
@@ -477,7 +482,7 @@ async function testActionHelpDoesNotRunCommands() {
   const staticHelp = [
     ["refresh-button", "Refresh", "Reloads sessions, selected-session details, settings, and cmux status. It does not scan transcript files or run AI."],
     ["retitle-weak-button", "Retitle weak titles", "Uses AI to replace short, generic, or duplicate titles. Session summaries and topics stay unchanged."],
-    ["scan-button", "Scan", "Checks all Codex and Claude transcript files and imports new or changed sessions. It does not itself run AI analysis."]
+    ["scan-button", "Scan", "Checks all Codex, Claude, and Grok transcript files and imports new or changed sessions. It does not itself run AI analysis."]
   ];
   for (const [id, label, description] of staticHelp) {
     assertActionHelp(environment.nodes[id], label, description);

@@ -56,7 +56,7 @@ function element(tag, className, text) {
 const actionHelpText = {
   refresh: "Reloads sessions, selected-session details, settings, and cmux status. It does not scan transcript files or run AI.",
   retitleWeak: "Uses AI to replace short, generic, or duplicate titles. Session summaries and topics stay unchanged.",
-  scan: "Checks all Codex and Claude transcript files and imports new or changed sessions. It does not itself run AI analysis.",
+  scan: "Checks all Codex, Claude, and Grok transcript files and imports new or changed sessions. It does not itself run AI analysis.",
   analyze: "Uses the selected AI provider to create this session's title, summary, and topics.",
   reanalyze: "Uses the selected AI provider to replace this session's title, summary, and topics. Existing analysis stays if it fails.",
   retitle: "Uses existing topic summaries to generate only a new title. It does not reread the full conversation.",
@@ -441,13 +441,13 @@ function actionButtons(session) {
   actions.append(explainAction(analyze, analyzeLabel, session.analysis_status === "none" ? actionHelpText.analyze : actionHelpText.reanalyze));
   if (session.topics?.length) actions.append(explainAction(retitle, "Retitle", actionHelpText.retitle));
   actions.append(explainAction(rescan, "Rescan", actionHelpText.rescan));
-  if (session.agent === "codex" || session.agent === "claude") {
+  if (session.agent === "codex" || session.agent === "claude" || session.agent === "grok") {
     const resume = element("button", "", "Resume normally");
     resume.type = "button";
     resume.addEventListener("click", () => resumeSession(session.id, "normal"));
-    const bypassLabel = session.agent === "codex"
-      ? "Resume with YOLO"
-      : "Resume with dangerously skipped permissions";
+    const bypassLabel = session.agent === "claude"
+      ? "Resume with dangerously skipped permissions"
+      : "Resume with YOLO";
     const bypass = element("button", "resume-bypass", bypassLabel);
     bypass.type = "button";
     bypass.addEventListener("click", () => resumeSession(session.id, "bypass"));

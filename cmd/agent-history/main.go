@@ -26,6 +26,7 @@ import (
 	"github.com/jaintarun/agent-history/internal/source"
 	"github.com/jaintarun/agent-history/internal/source/claude"
 	"github.com/jaintarun/agent-history/internal/source/codex"
+	"github.com/jaintarun/agent-history/internal/source/grok"
 	"github.com/jaintarun/agent-history/internal/store"
 )
 
@@ -142,8 +143,9 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 	}
 	codexSource := codex.New(codex.DefaultHome())
 	claudeSource := claude.New(claude.DefaultHome())
-	scanner := source.NewScanner(database, codexSource, claudeSource)
-	launcher := launch.New(database, codexSource, claudeSource)
+	grokSource := grok.New(grok.DefaultHome())
+	scanner := source.NewScanner(database, codexSource, claudeSource, grokSource)
+	launcher := launch.New(database, codexSource, claudeSource, grokSource)
 	engine := analyze.NewEngine(database, analyzers)
 	worker := analyze.NewWorker(database, engine, 256)
 	logOutput, logCloser := serviceLogWriter(stderr)
@@ -424,7 +426,7 @@ func runScan(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	defaults := config.Defaults()
 	flags := flag.NewFlagSet("scan", flag.ContinueOnError)
 	flags.SetOutput(stdout)
-	agent := flags.String("agent", "all", "transcript source to scan: all, codex, or claude")
+	agent := flags.String("agent", "all", "transcript source to scan: all, codex, claude, or grok")
 	databasePath := flags.String("database", defaults.Database, "path to the SQLite database")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -448,6 +450,7 @@ func runScan(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	scanner := source.NewScanner(database,
 		codex.New(codex.DefaultHome()),
 		claude.New(claude.DefaultHome()),
+		grok.New(grok.DefaultHome()),
 	)
 	report, err := scanner.Scan(ctx, *agent)
 	if err != nil {

@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestLoadHookMappingsReadsClaudeAndCodex(t *testing.T) {
+func TestLoadHookMappingsReadsClaudeCodexAndGrok(t *testing.T) {
 	home := t.TempDir()
 	writeHookFixture(t, home, "claude", `{
   "sessions": {
@@ -19,15 +19,21 @@ func TestLoadHookMappingsReadsClaudeAndCodex(t *testing.T) {
     "two": {"sessionId":"codex-native","workspaceId":"w2","surfaceId":"s2","agentLifecycle":"idle","updatedAt":200}
   }
 }`)
+	writeHookFixture(t, home, "grok", `{
+  "sessions": {
+    "three": {"sessionId":"grok-native","workspaceId":"w3","surfaceId":"s3","agentLifecycle":"running","updatedAt":300}
+  }
+}`)
 
 	mappings, diagnostics := LoadHookMappings(home)
 	if len(diagnostics) != 0 {
 		t.Fatalf("diagnostics = %v", diagnostics)
 	}
-	if len(mappings) != 2 || mappings[0].Agent != "claude" || mappings[1].Agent != "codex" {
+	if len(mappings) != 3 || mappings[0].Agent != "claude" || mappings[1].Agent != "codex" || mappings[2].Agent != "grok" {
 		t.Fatalf("mappings = %#v", mappings)
 	}
-	if mappings[0].Lifecycle != "needsInput" || mappings[1].NativeSessionID != "codex-native" {
+	if mappings[0].Lifecycle != "needsInput" || mappings[1].NativeSessionID != "codex-native" ||
+		mappings[2].Lifecycle != "running" || mappings[2].NativeSessionID != "grok-native" {
 		t.Fatalf("mappings = %#v", mappings)
 	}
 }

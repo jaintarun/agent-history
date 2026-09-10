@@ -100,6 +100,46 @@ func TestScanCodexImportsFixture(t *testing.T) {
 	}
 }
 
+func TestScanGrokImportsFixture(t *testing.T) {
+	home := t.TempDir()
+	sessionDir := filepath.Join(home, "sessions", "%2Ftmp%2Fproject", "01a00000-0000-7000-8000-000000000010")
+	if err := os.MkdirAll(sessionDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	summary := `{"created_at":"2026-09-01T10:00:00Z","last_active_at":"2026-09-01T10:01:00Z","info":{"id":"01a00000-0000-7000-8000-000000000010","cwd":"/tmp/project"}}`
+	updates := `{"method":"session/update","timestamp":1788256800,"params":{"sessionId":"01a00000-0000-7000-8000-000000000010","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"Find this Grok session."}}}}` + "\n"
+	if err := os.WriteFile(filepath.Join(sessionDir, "summary.json"), []byte(summary), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sessionDir, "updates.jsonl"), []byte(updates), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GROK_HOME", home)
+	databasePath := filepath.Join(t.TempDir(), "history.db")
+	var stdout, stderr bytes.Buffer
+
+	code := run([]string{"scan", "--agent", "grok", "--database", databasePath}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("run(scan) code = %d, stderr = %q", code, stderr.String())
+	}
+	if got := stdout.String(); !strings.Contains(got, "discovered=1 imported=1") {
+		t.Fatalf("run(scan) stdout = %q", got)
+	}
+	database, err := store.Open(context.Background(), databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	detail, err := database.GetSession(context.Background(), source.StableID("grok", "01a00000-0000-7000-8000-000000000010"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail.Session.Agent != "grok" || len(detail.Messages) != 1 || detail.Messages[0].Text != "Find this Grok session." {
+		t.Fatalf("imported Grok session = %#v, messages = %#v", detail.Session, detail.Messages)
+	}
+}
+
 func TestServePrintsURLAndStopsCleanly(t *testing.T) {
 	databasePath := filepath.Join(t.TempDir(), "history.db")
 	t.Setenv("CMUX_SOCKET_PATH", filepath.Join(t.TempDir(), "missing-cmux.sock"))

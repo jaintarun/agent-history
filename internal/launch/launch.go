@@ -110,6 +110,8 @@ func permissionArgs(agent string, normal []string, permissions string) []string 
 		args[1] = "--dangerously-bypass-approvals-and-sandbox"
 	case "claude":
 		args = append([]string{"--dangerously-skip-permissions"}, args...)
+	case "grok":
+		args = append([]string{"--always-approve"}, args...)
 	}
 	return args
 }
@@ -136,6 +138,9 @@ func validateSpec(session store.Session, spec source.ResumeSpec) error {
 		wantArgs = []string{"resume", session.NativeSessionID}
 	case "claude":
 		wantExecutable = "claude"
+		wantArgs = []string{"--resume", session.NativeSessionID}
+	case "grok":
+		wantExecutable = "grok"
 		wantArgs = []string{"--resume", session.NativeSessionID}
 	default:
 		return fmt.Errorf("unsupported source agent %q", session.Agent)

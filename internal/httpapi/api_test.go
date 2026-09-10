@@ -192,6 +192,7 @@ func TestWebApplicationIncludesCoreWorkflows(t *testing.T) {
 		"Automatically sync titles to cmux",
 		"Include full conversations",
 		`placeholder="Search summaries and topics"`,
+		`<option value="grok">Grok</option>`,
 	} {
 		if !strings.Contains(markup, content) {
 			t.Errorf("embedded HTML missing content %q", content)

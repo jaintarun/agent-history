@@ -14,6 +14,7 @@ import (
 	"github.com/jaintarun/agent-history/internal/source"
 	"github.com/jaintarun/agent-history/internal/source/claude"
 	"github.com/jaintarun/agent-history/internal/source/codex"
+	"github.com/jaintarun/agent-history/internal/source/grok"
 	"github.com/jaintarun/agent-history/internal/store"
 )
 
@@ -52,8 +53,20 @@ func TestCopyCommandsAreSafelyRendered(t *testing.T) {
 			permissions: PermissionBypass,
 			want:        "claude --dangerously-skip-permissions --resume session:release.one",
 		},
+		{
+			name: "grok normal", agent: "grok",
+			id:          "01a00000-0000-7000-8000-000000000011",
+			permissions: PermissionNormal,
+			want:        "grok --resume 01a00000-0000-7000-8000-000000000011",
+		},
+		{
+			name: "grok always approve", agent: "grok",
+			id:          "01a00000-0000-7000-8000-000000000011",
+			permissions: PermissionBypass,
+			want:        "grok --always-approve --resume 01a00000-0000-7000-8000-000000000011",
+		},
 	}
-	launcher := newWithRunner(database, &fakeRunner{lookPathErr: errors.New("missing")}, codex.New(t.TempDir()), claude.New(t.TempDir()))
+	launcher := newWithRunner(database, &fakeRunner{lookPathErr: errors.New("missing")}, codex.New(t.TempDir()), claude.New(t.TempDir()), grok.New(t.TempDir()))
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			sessionID := importLaunchSession(t, database, test.agent, test.id, cwd, "Title with 'quote'")
@@ -116,6 +129,10 @@ func TestCmuxLaunchUsesExactTrustedArgv(t *testing.T) {
 		{
 			name: "codex bypass", agent: "codex", permissions: PermissionBypass,
 			command: "codex resume --dangerously-bypass-approvals-and-sandbox safe-session", adapter: codex.New(t.TempDir()),
+		},
+		{
+			name: "grok bypass", agent: "grok", permissions: PermissionBypass,
+			command: "grok --always-approve --resume safe-session", adapter: grok.New(t.TempDir()),
 		},
 	}
 	for _, test := range tests {
