@@ -98,7 +98,7 @@ func TestParseUpdatesExcludesInternalHiddenAndHostUpdates(t *testing.T) {
 		`{"method":"session/update","timestamp":1788256802,"params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"hidden assistant"},"_meta":{"hideFromScrollback":true}}}}`,
 		`{"method":"session/update","timestamp":1788256803,"params":{"update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"host user"},"_meta":{"hostTurn":true}}}}`,
 		`{"method":"session/update","timestamp":1788256804,"params":{"update":{"sessionUpdate":"tool_call","toolCallId":"hidden-tool","rawInput":{"command":"private command"},"_meta":{"hideFromScrollback":true,"x.ai/tool":{"name":"bash"}}}}}`,
-		`{"method":"session/update","timestamp":1788256805,"params":{"update":{"sessionUpdate":"tool_call_update","toolCallId":"hidden-tool","status":"completed","rawOutput":{"output_for_prompt":"private output"},"_meta":{"hideFromScrollback":true}}}}`,
+		`{"method":"session/update","timestamp":1788256805,"params":{"update":{"sessionUpdate":"tool_call_update","toolCallId":"hidden-tool","status":"completed","rawOutput":{"output_for_prompt":"private output"}}}}`,
 		`{"method":"_x.ai/session/update","timestamp":1788256806,"params":{"update":{"sessionUpdate":"tool_call_update","toolCallId":"internal-tool","status":"completed","rawOutput":{"output_for_prompt":"internal output"}}}}`,
 		`{"method":"session/update","timestamp":1788256807,"params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"visible assistant"}}}}`,
 	}, "\n")
@@ -109,6 +109,39 @@ func TestParseUpdatesExcludesInternalHiddenAndHostUpdates(t *testing.T) {
 	}
 	if len(messages) != 2 || messages[0].Text != "visible user" || messages[1].Text != "visible assistant" {
 		t.Fatalf("messages = %#v", messages)
+	}
+}
+
+func TestReadKeepsNonzeroSummaryTimestamps(t *testing.T) {
+	dir := t.TempDir()
+	copyFixture(t, "basic", dir)
+	summary := `{
+  "created_at": "2026-09-01T10:00:10Z",
+  "last_active_at": "2026-09-01T10:00:20Z",
+  "info": {
+    "id": "01a00000-0000-7000-8000-000000000003",
+    "cwd": "/Users/example/work/grok-project"
+  }
+}`
+	if err := os.WriteFile(filepath.Join(dir, "summary.json"), []byte(summary), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "updates.jsonl")
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	imported, err := New(t.TempDir()).Read(context.Background(), source.Candidate{
+		Path: path, Size: info.Size(), ModTime: info.ModTime(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := imported.Session.StartedAt.Format(time.RFC3339); got != "2026-09-01T10:00:10Z" {
+		t.Fatalf("started at = %q", got)
+	}
+	if got := imported.Session.LastActiveAt.Format(time.RFC3339); got != "2026-09-01T10:00:20Z" {
+		t.Fatalf("last active at = %q", got)
 	}
 }
 
@@ -139,10 +172,13 @@ func TestParseUpdatesResetsToolStateOnRewind(t *testing.T) {
 		`{"method":"session/update","timestamp":1788256801,"params":{"update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"discard"},"_meta":{"promptIndex":1}}}}`,
 		`{"method":"session/update","timestamp":1788256802,"params":{"update":{"sessionUpdate":"tool_call","toolCallId":"reused","rawInput":{"command":"discard"},"_meta":{"x.ai/tool":{"name":"bash"}}}}}`,
 		`{"method":"session/update","timestamp":1788256803,"params":{"update":{"sessionUpdate":"tool_call_update","toolCallId":"reused","status":"completed","rawOutput":{"output_for_prompt":"discard"}}}}`,
+		`{"method":"session/update","timestamp":1788256803,"params":{"update":{"sessionUpdate":"tool_call","toolCallId":"suppressed","rawInput":{"command":"hidden"},"_meta":{"hideFromScrollback":true,"x.ai/tool":{"name":"bash"}}}}}`,
 		`{"method":"_x.ai/session/update","timestamp":1788256804,"params":{"update":{"sessionUpdate":"rewind_marker","target_prompt_index":1}}}`,
 		`{"method":"session/update","timestamp":1788256805,"params":{"update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"replacement"},"_meta":{"promptIndex":1}}}}`,
 		`{"method":"session/update","timestamp":1788256806,"params":{"update":{"sessionUpdate":"tool_call","toolCallId":"reused","rawInput":{"command":"replacement"},"_meta":{"x.ai/tool":{"name":"bash"}}}}}`,
 		`{"method":"session/update","timestamp":1788256807,"params":{"update":{"sessionUpdate":"tool_call_update","toolCallId":"reused","status":"completed","rawOutput":{"output_for_prompt":"replacement result"}}}}`,
+		`{"method":"session/update","timestamp":1788256808,"params":{"update":{"sessionUpdate":"tool_call","toolCallId":"suppressed","rawInput":{"command":"visible after rewind"},"_meta":{"x.ai/tool":{"name":"bash"}}}}}`,
+		`{"method":"session/update","timestamp":1788256809,"params":{"update":{"sessionUpdate":"tool_call_update","toolCallId":"suppressed","status":"completed","rawOutput":{"output_for_prompt":"visible suppressed result"}}}}`,
 	}, "\n")
 
 	messages, err := parseUpdates(context.Background(), strings.NewReader(input))
@@ -154,7 +190,7 @@ func TestParseUpdatesResetsToolStateOnRewind(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := string(serialized)
-	if strings.Contains(got, `"text":"discard"`) || !strings.Contains(got, "replacement result") {
+	if strings.Contains(got, `"text":"discard"`) || !strings.Contains(got, "replacement result") || !strings.Contains(got, "visible suppressed result") {
 		t.Fatalf("messages after rewind = %s", got)
 	}
 }
