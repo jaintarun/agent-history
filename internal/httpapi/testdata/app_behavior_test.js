@@ -476,6 +476,46 @@ async function testAnalysisProviderSettings() {
   assert.equal(body.analysis_model, "custom-model");
 }
 
+async function testCmuxMetadataComparisonAndPush() {
+  const environment = createEnvironment("off");
+  await settle();
+  const originalFetchHandler = environment.fetchHandler;
+  environment.fetchHandler = (url, options) => {
+    const path = String(url).replace("/test-token/api", "");
+    if (path === "/sessions/cmux-session/cmux-title") {
+      return Promise.resolve(fakeResponse({ status: "synced" }));
+    }
+    return originalFetchHandler(url, options);
+  };
+  const value = {
+    ...session("cmux-session", "current"),
+    title: "Generated title",
+    summary: "Generated short summary",
+    cmux: {
+      open: true,
+      lifecycle: "idle",
+      target: "workspace",
+      target_title: "Generated title",
+      title_state: "synced",
+      workspace_description: "Old description",
+      description_state: "different",
+      surface_title: "Old tab"
+    }
+  };
+  const band = evaluate(environment, `renderCmuxComparison(${JSON.stringify(value)})`);
+  const text = textOf(band);
+  assert.match(text, /cmux workspace descriptionOld description/);
+  assert.match(text, /Agent History descriptionGenerated short summary/);
+  const push = descendant(band, (node) => textOf(node) === "Send title and description to cmux");
+  assert.ok(push, "metadata push button missing");
+
+  environment.requests.length = 0;
+  await clickNode(push);
+  assert.ok(environment.requests.some((request) =>
+    request.url.endsWith("/sessions/cmux-session/cmux-title") && request.options.method === "POST"
+  ));
+}
+
 async function testActionHelpDoesNotRunCommands() {
   const environment = createEnvironment("off");
   await settle();
@@ -519,6 +559,7 @@ async function main() {
   await testResumePermissionActions();
   await testSearchScopeControl();
   await testAnalysisProviderSettings();
+  await testCmuxMetadataComparisonAndPush();
   await testActionHelpDoesNotRunCommands();
   process.stdout.write("browser behavior assertions passed\n");
 }

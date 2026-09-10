@@ -86,6 +86,8 @@ only invoke a resume specification created by a trusted source adapter.
 - Filter by agent, last-active date, custom date range, working directory,
   focused/multiple-topic status, and analysis state.
 - Serve a self-contained web application from the Go binary.
+- Observe exactly matched live cmux sessions and optionally synchronize the
+  generated title and short summary as workspace metadata.
 - Analyze, reanalyze, delete analysis, rescan, and resume normally or with an
   explicit agent-specific permission bypass through cmux or a copyable command.
 
@@ -613,6 +615,20 @@ still supporting:
 
 The web frontend consumes only the HTTP API. A future cmux-native frontend can
 use the same API without importing storage or analyzer code.
+
+### cmux metadata synchronization
+
+Agent History matches live cmux tabs by source agent and native session ID. For
+a workspace containing one mapped agent session, the generated session title
+is the workspace and tab title, and the existing generated short summary is the
+workspace description. This reuses current analysis and never makes a separate
+model call for cmux metadata.
+
+Automatic synchronization writes only blank metadata or metadata that still
+equals the last value Agent History successfully pushed. A manual change in
+cmux is therefore preserved until the user explicitly sends Agent History
+metadata again. A shared workspace can receive per-tab titles, but it receives
+no per-session description because cmux descriptions are workspace-level.
 
 ### Session resume and launch
 

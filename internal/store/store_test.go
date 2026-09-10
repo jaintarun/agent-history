@@ -34,8 +34,8 @@ func TestOpenMigratesEmptyDatabaseAndIsIdempotent(t *testing.T) {
 	if err := second.db.QueryRow(`SELECT count(*) FROM schema_migrations`).Scan(&migrations); err != nil {
 		t.Fatalf("query migrations: %v", err)
 	}
-	if migrations != 3 {
-		t.Fatalf("migration count = %d, want 3", migrations)
+	if migrations != 4 {
+		t.Fatalf("migration count = %d, want 4", migrations)
 	}
 
 	var connections []*sql.Conn
@@ -690,7 +690,8 @@ func TestReplaceCmuxSnapshotTracksOpenStateAndPushProvenance(t *testing.T) {
 	states := []CmuxSessionState{
 		{
 			SessionID: "cmux-open", Open: true, WorkspaceID: "workspace-1", SurfaceID: "surface-1",
-			WorkspaceTitle: "cmux title", SurfaceTitle: "cmux tab", WorkspaceHasCustomTitle: false,
+			WorkspaceTitle: "cmux title", WorkspaceDescription: "cmux description",
+			SurfaceTitle: "cmux tab", WorkspaceHasCustomTitle: false,
 			Lifecycle: "running", ObservedAt: observedAt,
 		},
 		{
@@ -702,7 +703,7 @@ func TestReplaceCmuxSnapshotTracksOpenStateAndPushProvenance(t *testing.T) {
 	if err := database.ReplaceCmuxSnapshot(ctx, status, states); err != nil {
 		t.Fatal(err)
 	}
-	if err := database.RecordCmuxPush(ctx, "cmux-open", "pushed workspace", "pushed tab", observedAt.Add(time.Minute)); err != nil {
+	if err := database.RecordCmuxPush(ctx, "cmux-open", "pushed workspace", "pushed tab", "pushed description", observedAt.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -710,10 +711,11 @@ func TestReplaceCmuxSnapshotTracksOpenStateAndPushProvenance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ok || !state.Open || state.Lifecycle != "running" || state.WorkspaceTitle != "cmux title" {
+	if !ok || !state.Open || state.Lifecycle != "running" || state.WorkspaceTitle != "cmux title" || state.WorkspaceDescription != "cmux description" {
 		t.Fatalf("cmux state = %#v, %v", state, ok)
 	}
-	if state.LastPushedWorkspaceTitle != "pushed workspace" || state.LastPushedSurfaceTitle != "pushed tab" {
+	if state.LastPushedWorkspaceTitle != "pushed workspace" || state.LastPushedSurfaceTitle != "pushed tab" ||
+		state.LastPushedWorkspaceDescription != "pushed description" {
 		t.Fatalf("push provenance = %#v", state)
 	}
 
@@ -725,7 +727,8 @@ func TestReplaceCmuxSnapshotTracksOpenStateAndPushProvenance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ok || state.Open || state.LastPushedWorkspaceTitle != "pushed workspace" || state.LastPushedSurfaceTitle != "pushed tab" {
+	if !ok || state.Open || state.LastPushedWorkspaceTitle != "pushed workspace" || state.LastPushedSurfaceTitle != "pushed tab" ||
+		state.LastPushedWorkspaceDescription != "pushed description" {
 		t.Fatalf("closed cmux state = %#v, %v", state, ok)
 	}
 	currentStatus, err := database.CmuxStatus(ctx)

@@ -16,7 +16,7 @@ func TestClientListsCapabilitiesWorkspacesAndSurfaces(t *testing.T) {
 		{method: "system.capabilities", result: map[string]any{"access_mode": "allowAll", "methods": []string{"workspace.list"}}},
 		{method: "workspace.list", result: map[string]any{"workspaces": []map[string]any{{
 			"id": "w1", "title": "Workspace", "custom_title": "Workspace",
-			"has_custom_title": true, "custom_color": "#196F3D",
+			"has_custom_title": true, "custom_color": "#196F3D", "description": "Short summary",
 		}}}},
 		{method: "surface.list", params: map[string]any{"workspace_id": "w1"}, result: map[string]any{"surfaces": []map[string]any{{"id": "s1", "title": "Tab", "type": "terminal"}}}},
 	})
@@ -34,7 +34,8 @@ func TestClientListsCapabilitiesWorkspacesAndSurfaces(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(workspaces) != 1 || workspaces[0].ID != "w1" ||
-		!workspaces[0].HasCustomTitle || workspaces[0].CustomColor != "#196F3D" {
+		!workspaces[0].HasCustomTitle || workspaces[0].CustomColor != "#196F3D" ||
+		workspaces[0].Description != "Short summary" {
 		t.Fatalf("workspaces = %#v", workspaces)
 	}
 	surfaces, err := client.Surfaces(context.Background(), "w1")
@@ -57,6 +58,22 @@ func TestClientSetsExactWorkspaceColor(t *testing.T) {
 
 	if err := NewClient(server.path).SetWorkspaceColor(
 		context.Background(), "w1", "#A04000",
+	); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestClientSetsExactWorkspaceDescription(t *testing.T) {
+	server := newRPCServer(t, []rpcExpectation{{
+		method: "workspace.action",
+		params: map[string]any{
+			"action": "set_description", "workspace_id": "w1", "description": "Short summary",
+		},
+		result: map[string]any{"workspace_id": "w1", "description": "Short summary"},
+	}})
+
+	if err := NewClient(server.path).SetWorkspaceDescription(
+		context.Background(), "w1", "Short summary",
 	); err != nil {
 		t.Fatal(err)
 	}

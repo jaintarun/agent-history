@@ -14,9 +14,9 @@ self-contained SQLite-backed web app.
 - **Keep history current automatically.** The background service finds new and
   updated sessions, refreshes affected summaries, and keeps running after login
   or reboot.
-- **Keep cmux organized.** Compare cmux and generated titles, send a better
-  title to cmux manually, or enable automatic title sync. Active agent sessions
-  also show live state and activity colors.
+- **Keep cmux organized.** Compare cmux and generated metadata, send a better
+  title and short description to cmux manually, or enable automatic sync.
+  Active agent sessions also show live state and activity colors.
 - **Resume where you stopped.** Open a Codex, Claude Code, or Grok session
   directly in cmux, with normal and permission-bypassing resume options, or copy
   the resume command when cmux is unavailable.
@@ -59,7 +59,7 @@ See the official [Grok Build documentation](https://docs.x.ai/build/overview).
 ### 2. Set up cmux
 
 cmux is optional for search and analysis. Install it for live-session status,
-title sync, activity colors, and one-click resume.
+metadata sync, activity colors, and one-click resume.
 
 ```sh
 brew tap manaflow-ai/cmux
@@ -255,8 +255,9 @@ session IDs; it does not guess from titles, folders, or timestamps. When cmux
 access is `allowAll`, the UI can:
 
 - filter sessions open in cmux;
-- compare cmux and generated titles;
-- explicitly or automatically send generated titles to cmux;
+- compare cmux and generated titles and descriptions;
+- explicitly or automatically send generated titles and short summaries to
+  cmux as workspace titles and descriptions;
 - color mapped AI-agent workspaces by last transcript activity: green through
   one hour, orange after one and before five hours, red at five hours or later;
   and
@@ -267,6 +268,12 @@ Codex and Grok show **Resume normally** and **Resume with YOLO**. Claude shows
 Grok, the YOLO action uses its `--always-approve` flag. Bypass actions disable
 vendor safeguards and must be selected explicitly. Terminal-only cmux
 workspaces are not recolored.
+
+Automatic metadata sync preserves titles and descriptions changed manually in
+cmux. Agent History updates a value only when it is blank or still equals the
+last value Agent History sent. Because cmux descriptions belong to workspaces,
+a workspace shared by multiple mapped agent sessions receives per-tab titles
+but no per-session description.
 
 If cmux is closed or unavailable, importing, analysis, and search continue.
 

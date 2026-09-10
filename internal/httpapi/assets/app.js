@@ -393,16 +393,20 @@ function renderCmuxComparison(session) {
     return band;
   }
 
-  const titleState = {
+  let metadataState = session.cmux.title_state;
+  if (session.cmux.description_state === "different") metadataState = "different";
+  else if (metadataState === "synced" && session.cmux.description_state === "no_agent_description") metadataState = "no_agent_description";
+  const metadataStateText = {
     synced: "Synced",
-    different: "Different - cmux title preserved",
-    no_agent_title: "No Agent History title"
-  }[session.cmux.title_state] || session.cmux.title_state;
-  heading.append(element("span", `cmux-state ${session.cmux.title_state}`, titleState));
-  if (session.cmux.title_state === "different" && session.title) {
-    const push = element("button", "", "Send Agent History title to cmux");
+    different: "Different - cmux metadata preserved",
+    no_agent_title: "No Agent History title",
+    no_agent_description: "No Agent History description"
+  }[metadataState] || metadataState;
+  heading.append(element("span", `cmux-state ${metadataState}`, metadataStateText));
+  if ((session.cmux.title_state === "different" || session.cmux.description_state === "different") && session.title) {
+    const push = element("button", "", "Send title and description to cmux");
     push.type = "button";
-    push.addEventListener("click", () => mutateSession(session.id, "/cmux-title", "POST", {}, "Title sent to cmux"));
+    push.addEventListener("click", () => mutateSession(session.id, "/cmux-title", "POST", {}, "Title and description sent to cmux"));
     heading.append(push);
   }
   band.append(heading);
@@ -410,6 +414,10 @@ function renderCmuxComparison(session) {
   const target = session.cmux.target === "tab" ? "cmux tab title" : "cmux workspace title";
   comparison.append(cmuxTitleValue(target, session.cmux.target_title || "Untitled"));
   comparison.append(cmuxTitleValue("Agent History title", session.title || "No generated title"));
+  if (session.cmux.target === "workspace") {
+    comparison.append(cmuxTitleValue("cmux workspace description", session.cmux.workspace_description || "No description"));
+    comparison.append(cmuxTitleValue("Agent History description", session.summary || "No generated description"));
+  }
   band.append(comparison);
   if (session.cmux.target === "workspace" && session.cmux.surface_title && session.cmux.surface_title.trim() !== session.cmux.target_title.trim()) {
     band.append(element("p", "cmux-secondary", `Mapped tab: ${session.cmux.surface_title}`));

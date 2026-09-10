@@ -40,9 +40,10 @@ type API interface {
 	RenameWorkspace(context.Context, string, string) error
 	RenameSurface(context.Context, string, string, string) error
 	SetWorkspaceColor(context.Context, string, string) error
+	SetWorkspaceDescription(context.Context, string, string) error
 }
 
-// Reconciler joins live cmux state to imported sessions and owns title and color writes.
+// Reconciler joins live cmux state to imported sessions and owns metadata writes.
 type Reconciler struct {
 	api    API
 	store  *store.Store
@@ -67,7 +68,7 @@ func NewReconciler(api API, database *store.Store, home string, logger *slog.Log
 	return &Reconciler{api: api, store: database, home: home, logger: logger, now: time.Now}
 }
 
-// Refresh stores current cmux state and applies eligible title and color sync.
+// Refresh stores current cmux state and applies eligible metadata sync.
 func (r *Reconciler) Refresh(ctx context.Context) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -174,7 +175,8 @@ func (r *Reconciler) snapshotLocked(ctx context.Context) (liveSnapshot, error) {
 		state := store.CmuxSessionState{
 			SessionID: sessionID, Open: true,
 			WorkspaceID: mapping.WorkspaceID, SurfaceID: mapping.SurfaceID,
-			WorkspaceTitle: workspace.Title, SurfaceTitle: surface.Title,
+			WorkspaceTitle: workspace.Title, WorkspaceDescription: workspace.Description,
+			SurfaceTitle:            surface.Title,
 			WorkspaceHasCustomTitle: workspace.HasCustomTitle,
 			Lifecycle:               mapping.Lifecycle, ObservedAt: observedAt,
 		}
@@ -262,6 +264,7 @@ func (r *Reconciler) syncEligibleTitles(ctx context.Context, snapshot liveSnapsh
 			continue
 		}
 		title := strings.TrimSpace(detail.Session.Title)
+		description := strings.TrimSpace(detail.Session.Summary)
 		if title == "" || detail.Session.AnalysisStatus != "current" {
 			continue
 		}
@@ -276,7 +279,7 @@ func (r *Reconciler) syncEligibleTitles(ctx context.Context, snapshot liveSnapsh
 			(!observed.WorkspaceHasCustomTitle || observed.WorkspaceTitle == state.LastPushedWorkspaceTitle) {
 			if err := r.api.RenameWorkspace(ctx, observed.WorkspaceID, title); err != nil {
 				syncErrors = append(syncErrors, fmt.Errorf("rename cmux workspace for session %s: %w", sessionID, err))
-			} else if err := r.store.RecordCmuxPush(ctx, sessionID, title, "", r.now().UTC()); err != nil {
+			} else if err := r.store.RecordCmuxPush(ctx, sessionID, title, "", "", r.now().UTC()); err != nil {
 				syncErrors = append(syncErrors, err)
 			} else {
 				wrote = true
@@ -286,7 +289,18 @@ func (r *Reconciler) syncEligibleTitles(ctx context.Context, snapshot liveSnapsh
 			strings.TrimSpace(observed.SurfaceTitle) != title {
 			if err := r.api.RenameSurface(ctx, observed.WorkspaceID, observed.SurfaceID, title); err != nil {
 				syncErrors = append(syncErrors, fmt.Errorf("rename cmux tab for session %s: %w", sessionID, err))
-			} else if err := r.store.RecordCmuxPush(ctx, sessionID, "", title, r.now().UTC()); err != nil {
+			} else if err := r.store.RecordCmuxPush(ctx, sessionID, "", title, "", r.now().UTC()); err != nil {
+				syncErrors = append(syncErrors, err)
+			} else {
+				wrote = true
+			}
+		}
+		observedDescription := strings.TrimSpace(observed.WorkspaceDescription)
+		if description != "" && observedDescription != description &&
+			(observedDescription == "" || observedDescription == strings.TrimSpace(state.LastPushedWorkspaceDescription)) {
+			if err := r.api.SetWorkspaceDescription(ctx, observed.WorkspaceID, description); err != nil {
+				syncErrors = append(syncErrors, fmt.Errorf("set cmux workspace description for session %s: %w", sessionID, err))
+			} else if err := r.store.RecordCmuxPush(ctx, sessionID, "", "", description, r.now().UTC()); err != nil {
 				syncErrors = append(syncErrors, err)
 			} else {
 				wrote = true
@@ -296,7 +310,7 @@ func (r *Reconciler) syncEligibleTitles(ctx context.Context, snapshot liveSnapsh
 	return wrote, errors.Join(syncErrors...)
 }
 
-// PushTitle explicitly writes one generated title to its exact cmux target.
+// PushTitle explicitly writes generated session metadata to its exact cmux target.
 func (r *Reconciler) PushTitle(ctx context.Context, sessionID string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -313,20 +327,28 @@ func (r *Reconciler) PushTitle(ctx context.Context, sessionID string) error {
 		return err
 	}
 	title := strings.TrimSpace(detail.Session.Title)
+	description := strings.TrimSpace(detail.Session.Summary)
 	if title == "" {
 		return errors.New("session has no Agent History title")
 	}
 	var pushErrors []error
 	if err := r.api.RenameSurface(ctx, observed.WorkspaceID, observed.SurfaceID, title); err != nil {
 		pushErrors = append(pushErrors, fmt.Errorf("rename cmux tab: %w", err))
-	} else if err := r.store.RecordCmuxPush(ctx, sessionID, "", title, r.now().UTC()); err != nil {
+	} else if err := r.store.RecordCmuxPush(ctx, sessionID, "", title, "", r.now().UTC()); err != nil {
 		pushErrors = append(pushErrors, err)
 	}
 	if snapshot.sessionsInWorkspace[observed.WorkspaceID] == 1 {
 		if err := r.api.RenameWorkspace(ctx, observed.WorkspaceID, title); err != nil {
 			pushErrors = append(pushErrors, fmt.Errorf("rename cmux workspace: %w", err))
-		} else if err := r.store.RecordCmuxPush(ctx, sessionID, title, "", r.now().UTC()); err != nil {
+		} else if err := r.store.RecordCmuxPush(ctx, sessionID, title, "", "", r.now().UTC()); err != nil {
 			pushErrors = append(pushErrors, err)
+		}
+		if description != "" {
+			if err := r.api.SetWorkspaceDescription(ctx, observed.WorkspaceID, description); err != nil {
+				pushErrors = append(pushErrors, fmt.Errorf("set cmux workspace description: %w", err))
+			} else if err := r.store.RecordCmuxPush(ctx, sessionID, "", "", description, r.now().UTC()); err != nil {
+				pushErrors = append(pushErrors, err)
+			}
 		}
 	}
 	if _, err := r.snapshotLocked(ctx); err != nil {

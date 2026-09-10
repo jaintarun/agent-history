@@ -246,7 +246,7 @@ func TestAutomaticSyncPolicy(t *testing.T) {
 				if err := reconciler.RefreshWithoutSync(context.Background()); err != nil {
 					t.Fatal(err)
 				}
-				if err := database.RecordCmuxPush(context.Background(), "session", test.lastWorkspace, test.lastSurface, time.Now()); err != nil {
+				if err := database.RecordCmuxPush(context.Background(), "session", test.lastWorkspace, test.lastSurface, "", time.Now()); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -260,6 +260,64 @@ func TestAutomaticSyncPolicy(t *testing.T) {
 			}
 			if got := surfaceCalls > 0; got != test.wantSurfaceCall {
 				t.Fatalf("surface renamed = %v, want %v; calls=%v", got, test.wantSurfaceCall, api.calls)
+			}
+		})
+	}
+}
+
+func TestAutomaticDescriptionSyncPolicy(t *testing.T) {
+	tests := []struct {
+		name            string
+		auto            bool
+		analysisStatus  string
+		description     string
+		lastDescription string
+		wantCall        bool
+	}{
+		{name: "setting off", description: ""},
+		{name: "blank description", auto: true, wantCall: true},
+		{name: "previously pushed description", auto: true, description: "old summary", lastDescription: "old summary", wantCall: true},
+		{name: "manually changed description", auto: true, description: "manual notes", lastDescription: "old summary"},
+		{name: "manual description without provenance", auto: true, description: "manual notes"},
+		{name: "already current", auto: true, description: "summary"},
+		{name: "partial analysis", auto: true, analysisStatus: "partial", wantCall: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			database := openReconcilerStore(t)
+			status := test.analysisStatus
+			if status == "" {
+				status = "current"
+			}
+			upsertAnalyzedSession(t, database, "session", "codex", "native", "Generated title", status)
+			if err := database.SetSetting(context.Background(), "cmux.title_sync", fmt.Sprint(test.auto)); err != nil {
+				t.Fatal(err)
+			}
+			home := t.TempDir()
+			writeHookFixture(t, home, "codex", hookJSON("native", "w1", "s1", "idle"))
+			api := &fakeAPI{
+				capabilities: Capabilities{AccessMode: "allowAll"},
+				workspaces:   []Workspace{{ID: "w1", Title: "Generated title", HasCustomTitle: true, Description: test.description}},
+				surfaces:     map[string][]Surface{"w1": {{ID: "s1", Title: "tab"}}},
+			}
+			reconciler := NewReconciler(api, database, home, slog.Default())
+			if test.lastDescription != "" {
+				if err := reconciler.RefreshWithoutSync(context.Background()); err != nil {
+					t.Fatal(err)
+				}
+				if err := database.RecordCmuxPush(context.Background(), "session", "", "", test.lastDescription, time.Now()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			api.clearCalls()
+			if err := reconciler.Refresh(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if got := len(api.descriptionCalls) > 0; got != test.wantCall {
+				t.Fatalf("description updated = %v, want %v; calls=%#v", got, test.wantCall, api.descriptionCalls)
+			}
+			if test.wantCall && api.descriptionCalls[0] != (descriptionCall{workspaceID: "w1", description: "summary"}) {
+				t.Fatalf("description calls = %#v", api.descriptionCalls)
 			}
 		})
 	}
@@ -305,11 +363,35 @@ func TestManualPushRenamesExactTabButNotSharedWorkspace(t *testing.T) {
 		t.Fatal(err)
 	}
 	workspaceCalls, surfaceCalls := api.callCounts()
-	if workspaceCalls != 0 || surfaceCalls != 1 || api.surfaces["w1"][0].Title != "First generated" {
+	if workspaceCalls != 0 || surfaceCalls != 1 || len(api.descriptionCalls) != 0 || api.surfaces["w1"][0].Title != "First generated" {
 		t.Fatalf("calls = %v surfaces=%#v", api.calls, api.surfaces)
 	}
 	state, ok, err := database.CmuxState(context.Background(), "one")
 	if err != nil || !ok || state.LastPushedSurfaceTitle != "First generated" || state.LastPushedWorkspaceTitle != "" {
+		t.Fatalf("state = %#v, %v, %v", state, ok, err)
+	}
+}
+
+func TestManualPushSendsSummaryToSingleSessionWorkspace(t *testing.T) {
+	database := openReconcilerStore(t)
+	upsertAnalyzedSession(t, database, "one", "codex", "n1", "Generated title", "current")
+	home := t.TempDir()
+	writeHookFixture(t, home, "codex", hookJSON("n1", "w1", "s1", "idle"))
+	api := &fakeAPI{
+		capabilities: Capabilities{AccessMode: "allowAll"},
+		workspaces:   []Workspace{{ID: "w1", Title: "Manual title", Description: "Manual description", HasCustomTitle: true}},
+		surfaces:     map[string][]Surface{"w1": {{ID: "s1", Title: "Manual tab"}}},
+	}
+	reconciler := NewReconciler(api, database, home, slog.Default())
+
+	if err := reconciler.PushTitle(context.Background(), "one"); err != nil {
+		t.Fatal(err)
+	}
+	if len(api.descriptionCalls) != 1 || api.descriptionCalls[0] != (descriptionCall{workspaceID: "w1", description: "summary"}) {
+		t.Fatalf("description calls = %#v", api.descriptionCalls)
+	}
+	state, ok, err := database.CmuxState(context.Background(), "one")
+	if err != nil || !ok || state.WorkspaceDescription != "summary" || state.LastPushedWorkspaceDescription != "summary" {
 		t.Fatalf("state = %#v, %v, %v", state, ok, err)
 	}
 }
@@ -319,15 +401,21 @@ type colorCall struct {
 	color       string
 }
 
+type descriptionCall struct {
+	workspaceID string
+	description string
+}
+
 type fakeAPI struct {
-	mu           sync.Mutex
-	capabilities Capabilities
-	err          error
-	workspaces   []Workspace
-	surfaces     map[string][]Surface
-	calls        []string
-	colorCalls   []colorCall
-	colorErrors  map[string]error
+	mu               sync.Mutex
+	capabilities     Capabilities
+	err              error
+	workspaces       []Workspace
+	surfaces         map[string][]Surface
+	calls            []string
+	colorCalls       []colorCall
+	descriptionCalls []descriptionCall
+	colorErrors      map[string]error
 }
 
 func (f *fakeAPI) Capabilities(context.Context) (Capabilities, error) {
@@ -383,10 +471,23 @@ func (f *fakeAPI) SetWorkspaceColor(_ context.Context, workspaceID, color string
 	return nil
 }
 
+func (f *fakeAPI) SetWorkspaceDescription(_ context.Context, workspaceID, description string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.descriptionCalls = append(f.descriptionCalls, descriptionCall{workspaceID: workspaceID, description: description})
+	for index := range f.workspaces {
+		if f.workspaces[index].ID == workspaceID {
+			f.workspaces[index].Description = description
+		}
+	}
+	return f.err
+}
+
 func (f *fakeAPI) clearCalls() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = nil
+	f.descriptionCalls = nil
 }
 
 func (f *fakeAPI) callCounts() (int, int) {

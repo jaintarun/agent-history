@@ -1,26 +1,28 @@
-# cmux Session Status and Title Sync
+# cmux Session Status and Metadata Sync
 
 ## Goal
 
 Show which Agent History sessions are currently open in cmux, compare the
-Agent History title with the current cmux title, allow an explicit title push,
-and optionally keep eligible cmux titles synchronized automatically.
+Agent History title and short summary with the current cmux workspace metadata,
+allow an explicit metadata push, and optionally keep eligible cmux titles and
+descriptions synchronized automatically.
 
-Agent History remains the source of generated titles. cmux remains the display
-target, and a title manually changed in cmux is preserved unless the user
-explicitly pushes the Agent History title.
+Agent History remains the source of generated titles and short summaries. cmux
+remains the display target, and metadata manually changed in cmux is preserved
+unless the user explicitly pushes the Agent History metadata.
 
 ## Scope
 
 This feature will:
 
 - connect the continuously running Agent History service to the local cmux API;
-- match Claude and Codex sessions using native agent session IDs from cmux hook
-  state;
+- match Claude, Codex, and Grok sessions using native agent session IDs from
+  cmux hook state;
 - show whether a session is open in cmux and its agent lifecycle;
-- show the Agent History and cmux titles together when they differ;
-- add a per-session `Send Agent History title to cmux` command;
-- add an `Automatically sync titles to cmux` setting;
+- show the Agent History and cmux titles and descriptions together when they
+  differ;
+- add a per-session `Send title and description to cmux` command;
+- add an `Automatically sync titles and descriptions to cmux` setting;
 - add an `All`, `Open in cmux`, and `Not open in cmux` session filter; and
 - retain the existing browser-page refresh, filters, and selected session.
 
@@ -28,10 +30,10 @@ This feature will not:
 
 - embed the Agent History web application inside cmux;
 - modify Codex state databases, Claude transcripts, or cmux Vault records;
-- implement bidirectional title synchronization;
+- implement bidirectional metadata synchronization;
 - enable cmux's separate AI workspace auto-naming;
 - infer session identity from titles, directories, or timestamps; or
-- overwrite an independently changed cmux title during automatic sync.
+- overwrite independently changed cmux metadata during automatic sync.
 
 ## cmux Prerequisite
 
@@ -53,9 +55,9 @@ cmux's documented hook files under `~/.cmuxterm` provide an exact mapping:
 (agent, native session ID) -> (workspace ID, surface ID, lifecycle)
 ```
 
-Agent History will support the Claude and Codex hook files. A mapping counts as
-`Open in cmux` only when its workspace and surface still exist in the current
-cmux API snapshot. Stale hook records do not count as open.
+Agent History supports the Claude, Codex, and Grok hook files. A mapping counts
+as `Open in cmux` only when its workspace and surface still exist in the
+current cmux API snapshot. Stale hook records do not count as open.
 
 Lifecycle is separate from open state and is displayed as one of `Running`,
 `Idle`, `Needs input`, or `Unknown`. Thus an idle agent remains `Open in cmux`
@@ -70,7 +72,8 @@ A small `internal/cmux` package will own:
 - cmux API availability and access-mode checks;
 - workspace and surface listing;
 - hook-state parsing and exact session matching;
-- workspace renaming; and
+- workspace renaming;
+- workspace description updates; and
 - surface/tab renaming.
 
 The client will use cmux's newline-delimited JSON Unix-socket API. It will have
@@ -87,10 +90,10 @@ A single reconciler will refresh cmux state at startup and every 60 seconds. A
 refresh will:
 
 1. list current workspaces and their surfaces;
-2. read Claude and Codex hook mappings;
+2. read Claude, Codex, and Grok hook mappings;
 3. match mappings to Agent History sessions by agent and native session ID;
-4. persist the current open/title/lifecycle observations; and
-5. apply eligible automatic title updates when the setting is enabled.
+4. persist the current open/title/description/lifecycle observations; and
+5. apply eligible automatic metadata updates when the setting is enabled.
 
 The reconciler will serialize refreshes so the timer, an API-triggered refresh,
 and a manual push cannot race. A failed refresh leaves the last observed title
@@ -104,17 +107,18 @@ session:
 
 - session ID;
 - workspace ID and surface ID;
-- current workspace and surface titles;
+- current workspace and surface titles plus the workspace description;
 - lifecycle and whether the session is currently open;
 - observation time;
-- last workspace and surface titles Agent History successfully pushed; and
+- last workspace and surface titles and workspace description Agent History
+  successfully pushed; and
 - last push time.
 
 Current state makes the `Open in cmux` filter queryable without breaking search
-pagination. The last-pushed title provides the provenance required to protect a
-later manual cmux rename.
+pagination. Last-pushed metadata provides the provenance required to protect a
+later manual cmux edit.
 
-## Title Behavior
+## Title and Description Behavior
 
 For the normal one-agent-session workspace, the detail view compares the Agent
 History title with the containing cmux workspace title. It also shows the exact
@@ -123,18 +127,24 @@ agent sessions, the exact tab becomes the comparison and synchronization target
 because the workspace title is shared. Whitespace-trimmed exact equality is
 considered synchronized.
 
-The manual `Send Agent History title to cmux` command:
+For a single-session workspace, the existing Agent History short summary is the
+cmux workspace description. It requires no additional analyzer request. For a
+workspace containing multiple mapped sessions, no description is synchronized
+because cmux has no per-tab description.
+
+The manual `Send title and description to cmux` command:
 
 - requires a nonempty Agent History title and an open exact mapping;
 - renames the mapped tab;
 - renames the workspace when that workspace has only one mapped agent session;
-- records the successfully pushed title; and
-- is allowed to replace a different cmux title because it is an explicit user
+- sets that workspace's description from the short summary;
+- records each successfully pushed value; and
+- is allowed to replace different cmux metadata because it is an explicit user
   action.
 
 For a workspace containing multiple mapped agent sessions, the command renames
-only the exact tab. This prevents one session from replacing the shared
-workspace title for the other sessions.
+only the exact tab. This prevents one session from replacing shared workspace
+metadata for the other sessions.
 
 Automatic synchronization runs only when all of these conditions hold:
 
@@ -145,6 +155,10 @@ Automatic synchronization runs only when all of these conditions hold:
 - either cmux has no custom workspace title, or the current cmux title equals
   the last workspace title Agent History successfully pushed.
 
+The same pass sets a nonempty short summary as the workspace description when
+the current cmux description is blank or equals the last description Agent
+History successfully pushed.
+
 The initial automatic sync renames only the eligible workspace. A tab is
 automatically updated only after Agent History has previously pushed that tab
 title and the current tab title still equals that last-pushed value. This is
@@ -152,9 +166,10 @@ necessary because cmux exposes custom-title ownership for workspaces but not for
 tabs. It prevents an automatic pass from overwriting a tab title changed
 independently in cmux.
 
-If the current cmux title differs from both the Agent History title and the last
-pushed title, the state is `Different - cmux title preserved`. Automatic sync
-does nothing and the explicit push button remains available.
+If either current cmux value differs from both the Agent History value and the
+last pushed value, the state is `Different - cmux metadata preserved`.
+Automatic sync preserves that value and the explicit push button remains
+available.
 
 cmux's built-in AI workspace auto-naming remains disabled to avoid competing
 writers and duplicate model usage.
@@ -162,13 +177,13 @@ writers and duplicate model usage.
 ## HTTP API
 
 The existing session list and detail responses will gain a nested `cmux` value
-when cmux state is known. It will contain open state, lifecycle, workspace and
-surface titles, title comparison state, and last observation time. Internal
-socket paths are not returned.
+when cmux state is known. It contains open state, lifecycle, workspace and
+surface titles, workspace description, comparison states, and last observation
+time. Internal socket paths are not returned.
 
 The API additions are:
 
-- `POST /api/sessions/{id}/cmux-title` to perform the explicit push;
+- `POST /api/sessions/{id}/cmux-title` to perform the explicit metadata push;
 - `POST /api/cmux/refresh` to request an immediate reconciliation;
 - `cmux=open|closed` on `GET /api/sessions`; and
 - `cmux_title_sync` on the existing settings GET and PUT endpoints.
@@ -190,16 +205,16 @@ refresh, and selected-session preservation.
 Open session rows will show a restrained cmux badge with lifecycle. The selected
 session will show a comparison block near its title:
 
-- synchronized: cmux title and a `Synced` status;
-- different: Agent History title, cmux title, preservation status, and the
+- synchronized: cmux metadata and a `Synced` status;
+- different: Agent History and cmux metadata, preservation status, and the
   explicit send button;
 - open but no Agent History title: cmux title only;
 - not open: `Not open in cmux`; or
 - unavailable: the cmux connection error without presenting stale data as live.
 
-The Settings dialog will add `Automatically sync titles to cmux`. Turning it
-off stops automatic writes but continues reading, comparison, filtering, and
-manual pushes.
+The Settings dialog exposes `Automatically sync titles and descriptions to
+cmux`. Turning it off stops automatic writes but continues reading, comparison,
+filtering, and manual pushes.
 
 ## Failure Handling
 
@@ -212,8 +227,9 @@ manual pushes.
 - stale mapping: mark the session not open.
 - workspace or tab closes during a push: return a conflict-style error and
   refresh cmux state.
-- workspace rename succeeds but tab rename fails, or vice versa: refresh state,
-  report the partial failure, and do not claim synchronization.
+- a workspace title, description, or tab title write succeeds while another
+  fails: refresh state, report the partial failure, and do not claim
+  synchronization.
 
 No cmux outage may prevent the Agent History server from starting or serving its
 existing API and web application.
@@ -224,7 +240,7 @@ Tests will cover:
 
 - cmux socket framing, timeout, error, listing, and rename requests using a fake
   Unix-socket server;
-- Claude and Codex hook parsing and exact native-ID matching;
+- Claude, Codex, and Grok hook parsing and exact native-ID matching;
 - stale, missing, duplicate, and multi-session workspace mappings;
 - database migration, current-state replacement, and open/closed filtering;
 - automatic-sync policy for unowned, previously pushed, manually changed,

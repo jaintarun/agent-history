@@ -17,18 +17,20 @@ type CmuxStatus struct {
 
 // CmuxSessionState is the last observed cmux state for one imported session.
 type CmuxSessionState struct {
-	SessionID                string
-	Open                     bool
-	WorkspaceID              string
-	SurfaceID                string
-	WorkspaceTitle           string
-	SurfaceTitle             string
-	WorkspaceHasCustomTitle  bool
-	Lifecycle                string
-	ObservedAt               time.Time
-	LastPushedWorkspaceTitle string
-	LastPushedSurfaceTitle   string
-	LastPushedAt             time.Time
+	SessionID                      string
+	Open                           bool
+	WorkspaceID                    string
+	SurfaceID                      string
+	WorkspaceTitle                 string
+	WorkspaceDescription           string
+	SurfaceTitle                   string
+	WorkspaceHasCustomTitle        bool
+	Lifecycle                      string
+	ObservedAt                     time.Time
+	LastPushedWorkspaceTitle       string
+	LastPushedSurfaceTitle         string
+	LastPushedWorkspaceDescription string
+	LastPushedAt                   time.Time
 }
 
 // SessionIdentity is the exact agent-native identity used to join cmux hooks.
@@ -79,8 +81,9 @@ func (s *Store) ReplaceCmuxSnapshot(ctx context.Context, status CmuxStatus, stat
 		if _, err := tx.ExecContext(ctx, `
             INSERT INTO cmux_session_state(
                 session_id, open, workspace_id, surface_id, workspace_title,
-                surface_title, workspace_has_custom_title, lifecycle, observed_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                surface_title, workspace_has_custom_title, lifecycle, observed_at,
+                workspace_description
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(session_id) DO UPDATE SET
                 open = excluded.open,
                 workspace_id = excluded.workspace_id,
@@ -89,10 +92,11 @@ func (s *Store) ReplaceCmuxSnapshot(ctx context.Context, status CmuxStatus, stat
                 surface_title = excluded.surface_title,
                 workspace_has_custom_title = excluded.workspace_has_custom_title,
                 lifecycle = excluded.lifecycle,
-                observed_at = excluded.observed_at`,
+                observed_at = excluded.observed_at,
+                workspace_description = excluded.workspace_description`,
 			state.SessionID, state.Open, state.WorkspaceID, state.SurfaceID,
 			state.WorkspaceTitle, state.SurfaceTitle, state.WorkspaceHasCustomTitle,
-			state.Lifecycle, formatTime(state.ObservedAt)); err != nil {
+			state.Lifecycle, formatTime(state.ObservedAt), state.WorkspaceDescription); err != nil {
 			return fmt.Errorf("replace cmux session %s: %w", state.SessionID, err)
 		}
 	}
@@ -102,8 +106,12 @@ func (s *Store) ReplaceCmuxSnapshot(ctx context.Context, status CmuxStatus, stat
 	return nil
 }
 
-// RecordCmuxPush records only nonempty targets that were successfully renamed.
-func (s *Store) RecordCmuxPush(ctx context.Context, sessionID, workspaceTitle, surfaceTitle string, pushedAt time.Time) error {
+// RecordCmuxPush records only nonempty metadata that was successfully written.
+func (s *Store) RecordCmuxPush(
+	ctx context.Context,
+	sessionID, workspaceTitle, surfaceTitle, workspaceDescription string,
+	pushedAt time.Time,
+) error {
 	if err := s.acquireWriter(ctx); err != nil {
 		return err
 	}
@@ -116,10 +124,11 @@ func (s *Store) RecordCmuxPush(ctx context.Context, sessionID, workspaceTitle, s
         UPDATE cmux_session_state SET
             last_pushed_workspace_title = coalesce(nullif(?, ''), last_pushed_workspace_title),
             last_pushed_surface_title = coalesce(nullif(?, ''), last_pushed_surface_title),
+            last_pushed_workspace_description = coalesce(nullif(?, ''), last_pushed_workspace_description),
             last_pushed_at = ?
-        WHERE session_id = ?`, workspaceTitle, surfaceTitle, formatTime(pushedAt), sessionID)
+        WHERE session_id = ?`, workspaceTitle, surfaceTitle, workspaceDescription, formatTime(pushedAt), sessionID)
 	if err != nil {
-		return fmt.Errorf("record cmux title push: %w", err)
+		return fmt.Errorf("record cmux metadata push: %w", err)
 	}
 	count, err := result.RowsAffected()
 	if err != nil {
@@ -200,17 +209,19 @@ func (s *Store) SessionsByNativeIdentity(ctx context.Context) ([]SessionIdentity
 const cmuxStateSelect = `SELECT
     session_id, open, workspace_id, surface_id, workspace_title, surface_title,
     workspace_has_custom_title, lifecycle, observed_at,
-    last_pushed_workspace_title, last_pushed_surface_title, last_pushed_at
+    last_pushed_workspace_title, last_pushed_surface_title, last_pushed_at,
+    workspace_description, last_pushed_workspace_description
 FROM cmux_session_state`
 
 func scanCmuxState(row rowScanner) (CmuxSessionState, error) {
 	var state CmuxSessionState
 	var observedAt string
-	var pushedWorkspace, pushedSurface, pushedAt sql.NullString
+	var pushedWorkspace, pushedSurface, pushedAt, pushedDescription sql.NullString
 	if err := row.Scan(
 		&state.SessionID, &state.Open, &state.WorkspaceID, &state.SurfaceID,
 		&state.WorkspaceTitle, &state.SurfaceTitle, &state.WorkspaceHasCustomTitle,
 		&state.Lifecycle, &observedAt, &pushedWorkspace, &pushedSurface, &pushedAt,
+		&state.WorkspaceDescription, &pushedDescription,
 	); err != nil {
 		return CmuxSessionState{}, err
 	}
@@ -221,6 +232,7 @@ func scanCmuxState(row rowScanner) (CmuxSessionState, error) {
 	}
 	state.LastPushedWorkspaceTitle = pushedWorkspace.String
 	state.LastPushedSurfaceTitle = pushedSurface.String
+	state.LastPushedWorkspaceDescription = pushedDescription.String
 	if pushedAt.Valid {
 		state.LastPushedAt, err = parseTime(pushedAt.String)
 		if err != nil {

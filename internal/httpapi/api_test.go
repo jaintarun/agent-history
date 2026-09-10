@@ -189,7 +189,7 @@ func TestWebApplicationIncludesCoreWorkflows(t *testing.T) {
 		}
 	}
 	for _, content := range []string{
-		"Automatically sync titles to cmux",
+		"Automatically sync titles and descriptions to cmux",
 		"Include full conversations",
 		`placeholder="Search summaries and topics"`,
 		`<option value="grok">Grok</option>`,
@@ -214,7 +214,7 @@ func TestWebApplicationIncludesCoreWorkflows(t *testing.T) {
 		`["cmux-filter", "cmux"]`,
 		`element("span", ` + "`cmux-label ${session.cmux.lifecycle}`" + `, `,
 		`function renderCmuxComparison(session)`,
-		`Different - cmux title preserved`,
+		`Different - cmux metadata preserved`,
 		`"Resume normally"`,
 		`"Resume with YOLO"`,
 		`"Resume with dangerously skipped permissions"`,
@@ -442,7 +442,8 @@ func TestCmuxSessionStateAndFiltering(t *testing.T) {
 		Available: true, AccessMode: "allowAll", ObservedAt: observedAt,
 	}, []store.CmuxSessionState{{
 		SessionID: "session-1", Open: true, WorkspaceID: "workspace-1", SurfaceID: "surface-1",
-		WorkspaceTitle: "Old cmux title", SurfaceTitle: "Codex", Lifecycle: "running", ObservedAt: observedAt,
+		WorkspaceTitle: "Old cmux title", WorkspaceDescription: "Old cmux description",
+		SurfaceTitle: "Codex", Lifecycle: "running", ObservedAt: observedAt,
 	}}); err != nil {
 		t.Fatal(err)
 	}
@@ -457,14 +458,16 @@ func TestCmuxSessionStateAndFiltering(t *testing.T) {
 		Sessions []struct {
 			ID   string `json:"id"`
 			Cmux *struct {
-				Open           bool   `json:"open"`
-				Lifecycle      string `json:"lifecycle"`
-				WorkspaceTitle string `json:"workspace_title"`
-				SurfaceTitle   string `json:"surface_title"`
-				Target         string `json:"target"`
-				TargetTitle    string `json:"target_title"`
-				TitleState     string `json:"title_state"`
-				ObservedAt     string `json:"observed_at"`
+				Open                 bool   `json:"open"`
+				Lifecycle            string `json:"lifecycle"`
+				WorkspaceTitle       string `json:"workspace_title"`
+				WorkspaceDescription string `json:"workspace_description"`
+				SurfaceTitle         string `json:"surface_title"`
+				Target               string `json:"target"`
+				TargetTitle          string `json:"target_title"`
+				TitleState           string `json:"title_state"`
+				DescriptionState     string `json:"description_state"`
+				ObservedAt           string `json:"observed_at"`
 			} `json:"cmux"`
 		} `json:"sessions"`
 	}
@@ -474,6 +477,7 @@ func TestCmuxSessionStateAndFiltering(t *testing.T) {
 	}
 	cmux := result.Sessions[0].Cmux
 	if !cmux.Open || cmux.Lifecycle != "running" || cmux.WorkspaceTitle != "Old cmux title" ||
+		cmux.WorkspaceDescription != "Old cmux description" || cmux.DescriptionState != "different" ||
 		cmux.SurfaceTitle != "Codex" || cmux.Target != "workspace" || cmux.TargetTitle != "Old cmux title" ||
 		cmux.TitleState != "different" || cmux.ObservedAt != observedAt.Format(time.RFC3339Nano) {
 		t.Fatalf("cmux response = %#v", cmux)
@@ -493,7 +497,7 @@ func TestCmuxSessionStateAndFiltering(t *testing.T) {
 	}
 }
 
-func TestCmuxRefreshAndManualTitlePush(t *testing.T) {
+func TestCmuxRefreshAndManualMetadataPush(t *testing.T) {
 	application, _, _, _, _, _ := testHandler(t)
 	integration := &fakeCmux{status: store.CmuxStatus{Available: true, AccessMode: "allowAll"}}
 	application.(*handler).cmux = integration

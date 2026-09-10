@@ -51,7 +51,7 @@ type Launcher interface {
 	Launch(context.Context, string, string, string) (LaunchResult, error)
 }
 
-// Cmux controls live cmux reconciliation and explicit title writes.
+// Cmux controls live cmux reconciliation and explicit metadata writes.
 type Cmux interface {
 	Refresh(context.Context) error
 	PushTitle(context.Context, string) error
@@ -605,7 +605,7 @@ func (h *handler) pushCmuxTitle(response http.ResponseWriter, request *http.Requ
 		if message == "session is not open in cmux" || message == "session has no Agent History title" {
 			writeError(response, http.StatusConflict, "cmux_conflict", message)
 		} else {
-			writeError(response, http.StatusServiceUnavailable, "cmux_unavailable", "cmux title could not be updated")
+			writeError(response, http.StatusServiceUnavailable, "cmux_unavailable", "cmux metadata could not be updated")
 		}
 		return
 	}
@@ -776,14 +776,16 @@ type sessionResponse struct {
 }
 
 type cmuxResponse struct {
-	Open           bool   `json:"open"`
-	Lifecycle      string `json:"lifecycle"`
-	WorkspaceTitle string `json:"workspace_title"`
-	SurfaceTitle   string `json:"surface_title"`
-	Target         string `json:"target,omitempty"`
-	TargetTitle    string `json:"target_title,omitempty"`
-	TitleState     string `json:"title_state"`
-	ObservedAt     string `json:"observed_at"`
+	Open                 bool   `json:"open"`
+	Lifecycle            string `json:"lifecycle"`
+	WorkspaceTitle       string `json:"workspace_title"`
+	WorkspaceDescription string `json:"workspace_description"`
+	SurfaceTitle         string `json:"surface_title"`
+	Target               string `json:"target,omitempty"`
+	TargetTitle          string `json:"target_title,omitempty"`
+	TitleState           string `json:"title_state"`
+	DescriptionState     string `json:"description_state"`
+	ObservedAt           string `json:"observed_at"`
 }
 
 type topicResponse struct {
@@ -839,8 +841,9 @@ func (h *handler) sessionDTO(ctx context.Context, session store.Session) (sessio
 	}
 	cmux := &cmuxResponse{
 		Open: state.Open, Lifecycle: state.Lifecycle,
-		WorkspaceTitle: state.WorkspaceTitle, SurfaceTitle: state.SurfaceTitle,
-		TitleState: "not_open", ObservedAt: formatAPITime(state.ObservedAt),
+		WorkspaceTitle: state.WorkspaceTitle, WorkspaceDescription: state.WorkspaceDescription,
+		SurfaceTitle: state.SurfaceTitle, TitleState: "not_open", DescriptionState: "not_open",
+		ObservedAt: formatAPITime(state.ObservedAt),
 	}
 	if state.Open {
 		count, err := h.store.OpenCmuxSessionsInWorkspace(ctx, state.WorkspaceID)
@@ -852,6 +855,17 @@ func (h *handler) sessionDTO(ctx context.Context, session store.Session) (sessio
 		if count > 1 {
 			cmux.Target = "tab"
 			cmux.TargetTitle = state.SurfaceTitle
+			cmux.DescriptionState = "not_applicable"
+		} else {
+			summary := strings.TrimSpace(session.Summary)
+			switch {
+			case summary == "":
+				cmux.DescriptionState = "no_agent_description"
+			case summary == strings.TrimSpace(state.WorkspaceDescription):
+				cmux.DescriptionState = "synced"
+			default:
+				cmux.DescriptionState = "different"
+			}
 		}
 		title := strings.TrimSpace(session.Title)
 		switch {
