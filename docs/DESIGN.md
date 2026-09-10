@@ -8,9 +8,9 @@ frontend is added later.
 
 ## Problem
 
-Developers accumulate hundreds or thousands of long-running Codex and Claude
-Code sessions. Existing transcript titles and literal text search are often not
-enough to recover a conversation because:
+Developers accumulate hundreds or thousands of long-running Codex, Claude Code,
+and Grok sessions. Existing transcript titles and literal text search are often
+not enough to recover a conversation because:
 
 - the remembered wording differs from the transcript;
 - one session may cover several unrelated tasks;
@@ -24,7 +24,7 @@ enough to recover a conversation because:
 
 Provide one local interface where a developer can:
 
-1. Search and filter Codex and Claude sessions.
+1. Search and filter Codex, Claude Code, and Grok sessions.
 2. Understand a session without reading its full transcript.
 3. See when and where the work happened.
 4. Reanalyze a session when its generated title or summary is poor.
@@ -73,7 +73,7 @@ only invoke a resume specification created by a trusted source adapter.
 
 ### Included
 
-- Discover local Codex and Claude Code session transcripts.
+- Discover local Codex, Claude Code, and Grok session transcripts.
 - Normalize visible user text, visible assistant text, useful tool commands,
   and bounded tool results.
 - Exclude reasoning, thinking blocks, system prompts, and injected instruction
@@ -165,30 +165,30 @@ The detail view exposes only the core actions:
   permission behavior or provide a copyable command.
 - **Resume with bypass**: explicitly launch Codex with
   `--dangerously-bypass-approvals-and-sandbox` or Claude with
-  `--dangerously-skip-permissions`.
+  `--dangerously-skip-permissions`, or Grok with `--always-approve`.
 
 ## System Architecture
 
 ```text
- Codex files         Claude files
-     |                    |
-     +------ source adapters ------+
-                                    |
-                              normalizer
-                                    |
-                               SQLite/FTS5
-                              /             \
-                    analysis worker       search queries
-                          |                      |
-              turn builder + compactor        HTTP API
-                          |                      |
-              boundary scorer + summary tree   |
-                          |                      |
-                   analyzer adapters     embedded web UI
-                          |                      |
-                  Codex / Claude CLI     launcher adapter
-                                               /       \
-                                             cmux   copy command
+ Codex files       Claude files       Grok files
+      |                 |                 |
+      +---------- source adapters --------+
+                       |
+                  normalizer
+                       |
+                  SQLite/FTS5
+                 /             \
+       analysis worker       search queries
+             |                      |
+ turn builder + compactor          HTTP API
+             |                      |
+ boundary scorer + summary tree     |
+             |                      |
+      analyzer adapters      embedded web UI
+             |                      |
+     Codex / Claude CLI       launcher adapter
+                                  /       \
+                                cmux   copy command
 ```
 
 ### Source adapters
@@ -209,6 +209,9 @@ The first adapters are:
 - `codex`: active and archived rollout JSONL records under `CODEX_HOME` or
   `~/.codex`.
 - `claude`: project JSONL records under `CLAUDE_CONFIG_DIR` or `~/.claude`.
+- `grok`: top-level ACP update streams under `GROK_HOME` or `~/.grok/sessions`.
+  Nested subagent streams and events removed by Grok rewind markers are not
+  imported.
 
 Discovery records path, size, modification time, and native session ID. An
 unchanged file is skipped. A changed file is parsed completely and its messages
@@ -428,8 +431,9 @@ analyzed_at
 analyzed_hash
 ```
 
-The transcript source agent and analysis provider are separate. Either CLI may
-summarize a Codex or Claude transcript.
+The transcript source agent and analysis provider are separate. Either shipped
+analyzer CLI may summarize a Codex, Claude Code, or Grok transcript. Grok is a
+session source and resume target, not an analysis provider.
 
 Leaf-size, overlap, idle, boundary-confidence, and rollup-fanout values start as
 tested internal defaults rather than user-facing knobs. Promote one to a setting
@@ -443,7 +447,7 @@ The initial schema has five ordinary tables and one FTS5 virtual table.
 
 ```text
 id                    internal stable ID
-agent                 codex or claude
+agent                 codex, claude, or grok
 native_session_id     provider session ID
 source_path           current transcript path
 source_size           discovery fast-path
@@ -630,6 +634,7 @@ Source adapter specifications remain equivalent to the normal commands:
 ```text
 codex resume <session-id>
 claude --resume <session-id>
+grok --resume <session-id>
 ```
 
 After validating that normal specification against stored metadata, the
@@ -638,6 +643,7 @@ launcher may apply the fixed `bypass` transform:
 ```text
 codex resume --dangerously-bypass-approvals-and-sandbox <session-id>
 claude --dangerously-skip-permissions --resume <session-id>
+grok --always-approve --resume <session-id>
 ```
 
 The launch endpoint supports two outcomes:
@@ -703,7 +709,8 @@ All paths are configurable through flags for tests and alternate installations.
 
 The first release is successful when a developer can:
 
-1. Import representative Codex and Claude histories without storing reasoning.
+1. Import representative Codex, Claude Code, and Grok histories without storing
+   reasoning or abandoned Grok rewind branches.
 2. Find an old session by exact text, generated concepts, agent, date, or folder.
 3. distinguish focused and multiple-topic sessions from the result list.
 4. Inspect title, summary, topic details, original visible messages, start time,

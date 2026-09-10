@@ -2,7 +2,7 @@
 
 ## Implementation Status
 
-Implemented through Phase 9 for the first local release. The phase descriptions
+Implemented through Phase 10 for the first local release. The phase descriptions
 below remain the acceptance record; operational commands and measured results
 are documented in `README.md`.
 
@@ -11,7 +11,7 @@ are documented in `README.md`.
 Implement in vertical, testable increments. Each phase must leave the repository
 buildable and keep changes limited to the behavior introduced by that phase.
 
-The intended sequence is approximately ten focused commits. Commit boundaries
+The intended sequence is approximately eleven focused commits. Commit boundaries
 may change when one phase proves smaller, but unrelated phases should not be
 combined merely to reduce commit count.
 
@@ -387,8 +387,8 @@ resume-command experience.
 ### Work
 
 - Define the `Launcher` interface around structured `ResumeSpec` values.
-- Implement safe rendering of normal and permission-bypass Codex and Claude
-  resume commands.
+- Implement safe rendering of normal and permission-bypass Codex, Claude, and
+  Grok resume commands.
 - Accept only fixed `normal|bypass` permission modes, default an omitted mode to
   `normal`, validate the normal `ResumeSpec`, and then insert the
   application-owned agent-specific bypass flag.
@@ -414,8 +414,8 @@ resume-command experience.
   and that bypass construction does not mutate the normal `ResumeSpec`.
 - Tests cover spaces and quotes in cwd and title.
 - A fake cmux executable verifies launch success and error handling.
-- Manual dogfood verifies normal and matching bypass controls for both agents
-  without executing a real resume during automated checks.
+- Manual dogfood verifies normal and matching bypass controls for each source
+  agent without executing a real resume during automated checks.
 - The browser displays the exact selected normal or bypass fallback command when
   cmux is unavailable.
 
@@ -461,6 +461,41 @@ otherwise.
 The application is safe and useful for daily local operation without requiring
 cmux integration beyond the optional launcher.
 
+## Phase 10: Grok Session Source
+
+### Work
+
+- Discover top-level Grok Build `updates.jsonl` streams under `GROK_HOME` or
+  `~/.grok/sessions` and read session identity, cwd, and timestamps from the
+  adjacent `summary.json`.
+- Normalize visible user and assistant text plus bounded completed tool facts.
+- Exclude thought chunks, hidden scrollback, hooks, recaps, plans, transport
+  events, nested subagent streams, and incomplete trailing JSONL records.
+- Apply Grok rewind markers so abandoned conversation branches never enter
+  SQLite, FTS, or analyzer input.
+- Extend the schema, scanner, source filter, cmux hook matching, and embedded UI
+  for `grok` sessions.
+- Resume Grok normally with `grok --resume` or explicitly bypass prompts with
+  Grok's `--always-approve` flag.
+- Keep Grok source-only. Existing Codex and Claude Code analyzers summarize all
+  supported source agents.
+
+### Verification
+
+- Sanitized golden fixtures prove exact normalized output and hidden-content
+  exclusion.
+- Regression tests cover nested discovery, partial final records, rewind branch
+  removal, schema migration, source filtering, scan dispatch, cmux mapping, and
+  exact normal/bypass launch commands.
+- A fresh temporary database imports a real local Grok history and passes
+  `PRAGMA integrity_check` without invoking a model.
+- Browser tests expose Grok filtering and the correct resume actions.
+
+### Exit condition
+
+Grok sessions participate in the same scan, search, filtering, analysis, cmux,
+and resume workflows as other sources without making Grok an analyzer provider.
+
 ## Proposed Commit Sequence
 
 1. `Initialize Go CLI and project checks`
@@ -473,6 +508,7 @@ cmux integration beyond the optional launcher.
 8. `Add embedded session explorer UI`
 9. `Launch resumed sessions through cmux`
 10. `Harden scanning and document first release`
+11. `Import and resume Grok sessions`
 
 ## Deferred Backlog
 
@@ -482,7 +518,7 @@ Add an item only after the initial product demonstrates a need:
 - manual title editing and locking;
 - actual active-time estimation;
 - incremental byte-offset transcript tailing;
-- OpenCode, Pi, or other source adapters;
+- OpenCode, Pi, or additional source adapters;
 - direct OpenAI-compatible HTTP analyzer;
 - per-stage model routing;
 - embeddings and hybrid ranking;

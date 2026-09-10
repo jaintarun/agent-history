@@ -65,7 +65,8 @@ Implement `agent-history` as the smallest useful local application described in
 - Use sanitized provider-specific golden fixtures for transcript normalization.
 - Use temporary real SQLite databases for migrations, FTS5, transactions, and
   concurrency behavior; do not mock SQL.
-- Use `httptest` for the API and fake executables for Codex, Claude, and cmux.
+- Use `httptest` for the API and fake executables for Codex, Claude, Grok, and
+  cmux.
 - Inject clocks, IDs, analyzers, and command runners where deterministic tests
   require them.
 - Test malformed and partial transcripts, invalid analyzer output, cancellation,

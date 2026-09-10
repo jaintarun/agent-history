@@ -1,9 +1,9 @@
 # Agent History
 
-Agent History is a local, set-it-and-forget-it search tool for Codex and Claude
-Code sessions. It continuously imports new activity, builds useful titles and
-three-level summaries, and keeps everything searchable in a self-contained
-SQLite-backed web app.
+Agent History is a local, set-it-and-forget-it search tool for Codex, Claude
+Code, and Grok sessions. It continuously imports new activity, builds useful
+titles and three-level summaries, and keeps everything searchable in a
+self-contained SQLite-backed web app.
 
 ## Highlights
 
@@ -17,9 +17,9 @@ SQLite-backed web app.
 - **Keep cmux organized.** Compare cmux and generated titles, send a better
   title to cmux manually, or enable automatic title sync. Active agent sessions
   also show live state and activity colors.
-- **Resume where you stopped.** Open a Codex or Claude Code session directly in
-  cmux, with normal and permission-bypassing resume options, or copy the resume
-  command when cmux is unavailable.
+- **Resume where you stopped.** Open a Codex, Claude Code, or Grok session
+  directly in cmux, with normal and permission-bypassing resume options, or copy
+  the resume command when cmux is unavailable.
 
 Install it once, leave it running at
 [http://127.0.0.1:54321/](http://127.0.0.1:54321/), and open it whenever you
@@ -45,6 +45,17 @@ claude auth login
 Claude Code also supports its
 [recommended native installer](https://code.claude.com/docs/en/getting-started).
 
+Grok is supported as an optional **session source**, not as an analysis
+provider. Install and authenticate Grok Build if you want Agent History to
+import and resume its sessions:
+
+```sh
+curl -fsSL https://x.ai/cli/install.sh | bash
+grok login
+```
+
+See the official [Grok Build documentation](https://docs.x.ai/build/overview).
+
 ### 2. Set up cmux
 
 cmux is optional for search and analysis. Install it for live-session status,
@@ -55,8 +66,10 @@ brew tap manaflow-ai/cmux
 brew install --cask cmux
 open -a cmux
 cmux hooks setup
-cmux hooks setup codex
 ```
+
+`cmux hooks setup` installs integrations for supported agent CLIs found on
+`PATH`, including Codex and Grok.
 
 See the [cmux project and current installation
 instructions](https://github.com/manaflow-ai/cmux).
@@ -97,6 +110,8 @@ model in **Settings**, then use **Scan** or wait for the background scanner.
 - Discovers Codex rollouts under `CODEX_HOME` or `~/.codex`.
 - Discovers Claude Code project transcripts under `CLAUDE_CONFIG_DIR` or
   `~/.claude/projects`; nested subagent transcripts are excluded.
+- Discovers Grok Build session updates under `GROK_HOME` or `~/.grok/sessions`;
+  nested subagent streams and rewound conversation branches are excluded.
 - Removes private reasoning, thinking blocks, system/developer instructions,
   injected instruction envelopes, and transport metadata before persistence.
 - Stores visible user/assistant text and bounded useful tool facts in SQLite.
@@ -121,6 +136,10 @@ searched, which keeps results focused.
 | --- | --- | --- | --- |
 | Codex | `codex exec` | `gpt-5.4-mini` | Existing Codex CLI login |
 | Claude Code | `claude -p` | `haiku` | Existing Claude Code login |
+
+Grok is deliberately absent from this table: it is a transcript source and
+resume target only. Grok sessions are summarized with whichever Codex or Claude
+Code analyzer is selected in **Settings**.
 
 Provider executables are detected when the service starts. Install a missing
 CLI, authenticate it, then rerun `./install-startup.sh`. Agent History does not
@@ -183,6 +202,7 @@ Import without starting the server:
 ./agent-history scan --agent all
 ./agent-history scan --agent codex
 ./agent-history scan --agent claude
+./agent-history scan --agent grok
 ```
 
 Run `./agent-history serve --help` for bind, database, config, browser, and scan
@@ -230,9 +250,9 @@ most 64 MiB of reusable WAL data after checkpoints.
 
 ## cmux Integration
 
-Agent History matches open tabs only through native Codex or Claude session IDs;
-it does not guess from titles, folders, or timestamps. When cmux access is
-`allowAll`, the UI can:
+Agent History matches open tabs only through native Codex, Claude, or Grok
+session IDs; it does not guess from titles, folders, or timestamps. When cmux
+access is `allowAll`, the UI can:
 
 - filter sessions open in cmux;
 - compare cmux and generated titles;
@@ -242,9 +262,10 @@ it does not guess from titles, folders, or timestamps. When cmux access is
   and
 - resume normally or with an explicit agent-specific permission bypass.
 
-Codex shows **Resume normally** and **Resume with YOLO**. Claude shows **Resume
-normally** and **Resume with dangerously skipped permissions**. Bypass actions
-disable vendor safeguards and must be selected explicitly. Terminal-only cmux
+Codex and Grok show **Resume normally** and **Resume with YOLO**. Claude shows
+**Resume normally** and **Resume with dangerously skipped permissions**. For
+Grok, the YOLO action uses its `--always-approve` flag. Bypass actions disable
+vendor safeguards and must be selected explicitly. Terminal-only cmux
 workspaces are not recolored.
 
 If cmux is closed or unavailable, importing, analysis, and search continue.
