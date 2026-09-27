@@ -214,6 +214,19 @@ func (s *Store) DeleteAnalysis(ctx context.Context, sessionID string) error {
 	if err := requireSession(ctx, tx, sessionID); err != nil {
 		return err
 	}
+	if err := clearAnalysisInTx(ctx, tx, sessionID); err != nil {
+		return err
+	}
+	if err := rebuildSessionFTS(ctx, tx, sessionID); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit analysis deletion: %w", err)
+	}
+	return nil
+}
+
+func clearAnalysisInTx(ctx context.Context, tx *sql.Tx, sessionID string) error {
 	if _, err := tx.ExecContext(ctx, `
         UPDATE sessions SET
             title = NULL, summary = NULL, topic_count = NULL,
@@ -230,12 +243,6 @@ func (s *Store) DeleteAnalysis(ctx context.Context, sessionID string) error {
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM summary_nodes WHERE session_id = ?`, sessionID); err != nil {
 		return fmt.Errorf("delete summary nodes: %w", err)
-	}
-	if err := rebuildSessionFTS(ctx, tx, sessionID); err != nil {
-		return err
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit analysis deletion: %w", err)
 	}
 	return nil
 }

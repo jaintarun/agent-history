@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -71,6 +72,9 @@ func (s *Scanner) Rescan(ctx context.Context, sessionID string) (store.ImportRes
 	}
 	if imported.Session.NativeSessionID != detail.Session.NativeSessionID {
 		return store.ImportResult{}, fmt.Errorf("source session ID changed from %q to %q", detail.Session.NativeSessionID, imported.Session.NativeSessionID)
+	}
+	if normalizerOutdated(imported.NormalizerVersion, detail.Session.SourceHash) {
+		return s.store.ImportSessionReplacingAnalysis(ctx, imported.Session, imported.Messages)
 	}
 	return s.store.ImportSession(ctx, imported.Session, imported.Messages)
 }
@@ -141,7 +145,8 @@ func (s *Scanner) Scan(ctx context.Context, agent string) (report ScanReport, er
 			if err != nil {
 				return report, err
 			}
-			if exists && sourceUnchanged(state, candidate) {
+			versionOutdated := exists && normalizerOutdated(candidate.NormalizerVersion, state.SourceHash)
+			if exists && !versionOutdated && sourceUnchanged(state, candidate) {
 				report.Skipped++
 				continue
 			}
@@ -149,7 +154,12 @@ func (s *Scanner) Scan(ctx context.Context, agent string) (report ScanReport, er
 			if err != nil {
 				return report, fmt.Errorf("read %s session %q: %w", adapter.Name(), candidate.Path, err)
 			}
-			result, err := s.store.ImportSession(ctx, imported.Session, imported.Messages)
+			var result store.ImportResult
+			if versionOutdated {
+				result, err = s.store.ImportSessionReplacingAnalysis(ctx, imported.Session, imported.Messages)
+			} else {
+				result, err = s.store.ImportSession(ctx, imported.Session, imported.Messages)
+			}
 			if err != nil {
 				return report, fmt.Errorf("store %s session %q: %w", adapter.Name(), candidate.Path, err)
 			}
@@ -190,4 +200,8 @@ func sourceUnchanged(state store.SourceState, candidate Candidate) bool {
 	return state.SourcePath == candidate.Path &&
 		state.SourceSize == candidate.Size &&
 		state.SourceTime.Equal(candidate.ModTime.UTC().Truncate(time.Nanosecond))
+}
+
+func normalizerOutdated(version, sourceHash string) bool {
+	return version != "" && !strings.HasPrefix(sourceHash, version+":")
 }

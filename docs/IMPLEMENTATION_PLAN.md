@@ -468,12 +468,16 @@ cmux integration beyond the optional launcher.
 - Discover main Grok Build `updates.jsonl` streams under `GROK_HOME` or
   `~/.grok/sessions` and read session identity, cwd, and timestamps from the
   adjacent `summary.json`.
-- Normalize visible user and assistant text plus bounded completed tool facts.
+- Normalize visible user and assistant text only; exclude all Grok tool calls
+  and tool results from stored messages, FTS, and analyzer input.
 - Exclude thought chunks, hidden scrollback, hooks, recaps, plans, transport
   events, sibling sessions marked as subagents, nested subagent streams, and
   incomplete trailing JSONL records.
 - Apply Grok rewind markers so abandoned conversation branches never enter
   SQLite, FTS, or analyzer input.
+- Force a one-time reimport of previously indexed Grok sessions when the
+  normalizer version changes. Atomically clear stale analysis when stored
+  messages change, then allow automatic analysis to rebuild it.
 - Extend the schema, scanner, source filter, cmux hook matching, and embedded UI
   for `grok` sessions.
 - Resume Grok normally with `grok --resume` or explicitly bypass prompts with
@@ -484,7 +488,7 @@ cmux integration beyond the optional launcher.
 ### Verification
 
 - Sanitized golden fixtures prove exact normalized output and hidden-content
-  exclusion.
+  exclusion, including completed tool calls and results.
 - Regression tests cover nested discovery, partial final records, rewind branch
   removal, schema migration, source filtering, scan dispatch, cmux mapping, and
   exact normal/bypass launch commands.

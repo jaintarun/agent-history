@@ -47,7 +47,7 @@ func TestReadNormalizesVisibleUpdates(t *testing.T) {
 	serialized := string(got)
 	for _, hidden := range []string{
 		"private reasoning", "system instructions", "internal recap", "private hook", "hidden plan",
-		"intermediate duplicate",
+		"intermediate duplicate", "go test ./...", "tests pass",
 	} {
 		if strings.Contains(serialized, hidden) {
 			t.Errorf("normalized messages contain hidden text %q", hidden)
@@ -145,28 +145,26 @@ func TestReadKeepsNonzeroSummaryTimestamps(t *testing.T) {
 	}
 }
 
-func TestParseUpdatesRequiresTerminalToolUpdate(t *testing.T) {
+func TestParseUpdatesDropsToolCallsAndResults(t *testing.T) {
 	input := strings.Join([]string{
+		`{"method":"session/update","timestamp":1788256799,"params":{"update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"visible request"}}}}`,
 		`{"method":"session/update","timestamp":1788256800,"params":{"update":{"sessionUpdate":"tool_call","toolCallId":"unfinished","rawInput":{"command":"do not retain"},"_meta":{"x.ai/tool":{"name":"bash"}}}}}`,
 		`{"method":"session/update","timestamp":1788256801,"params":{"update":{"sessionUpdate":"tool_call","toolCallId":"finished","rawInput":{"command":"retain"},"_meta":{"x.ai/tool":{"name":"bash"}}}}}`,
 		`{"method":"session/update","timestamp":1788256802,"params":{"update":{"sessionUpdate":"tool_call_update","toolCallId":"finished","status":"completed","rawOutput":{"output_for_prompt":"done"}}}}`,
+		`{"method":"session/update","timestamp":1788256803,"params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"visible answer"}}}}`,
 	}, "\n")
 
 	messages, err := parseUpdates(context.Background(), strings.NewReader(input))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(messages) != 2 || !strings.Contains(messages[0].Text, "retain") || messages[1].Text != "done" {
+	if len(messages) != 2 || messages[0].Role != "user" || messages[0].Text != "visible request" ||
+		messages[1].Role != "assistant" || messages[1].Text != "visible answer" {
 		t.Fatalf("messages = %#v", messages)
-	}
-	for _, message := range messages {
-		if strings.Contains(message.Text, "do not retain") {
-			t.Fatalf("unfinished tool call was retained: %#v", messages)
-		}
 	}
 }
 
-func TestParseUpdatesResetsToolStateOnRewind(t *testing.T) {
+func TestParseUpdatesRewindKeepsOnlyCurrentConversation(t *testing.T) {
 	input := strings.Join([]string{
 		`{"method":"session/update","timestamp":1788256800,"params":{"update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"keep"},"_meta":{"promptIndex":0}}}}`,
 		`{"method":"session/update","timestamp":1788256801,"params":{"update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"discard"},"_meta":{"promptIndex":1}}}}`,
@@ -179,19 +177,16 @@ func TestParseUpdatesResetsToolStateOnRewind(t *testing.T) {
 		`{"method":"session/update","timestamp":1788256807,"params":{"update":{"sessionUpdate":"tool_call_update","toolCallId":"reused","status":"completed","rawOutput":{"output_for_prompt":"replacement result"}}}}`,
 		`{"method":"session/update","timestamp":1788256808,"params":{"update":{"sessionUpdate":"tool_call","toolCallId":"suppressed","rawInput":{"command":"visible after rewind"},"_meta":{"x.ai/tool":{"name":"bash"}}}}}`,
 		`{"method":"session/update","timestamp":1788256809,"params":{"update":{"sessionUpdate":"tool_call_update","toolCallId":"suppressed","status":"completed","rawOutput":{"output_for_prompt":"visible suppressed result"}}}}`,
+		`{"method":"session/update","timestamp":1788256810,"params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"replacement answer"}}}}`,
 	}, "\n")
 
 	messages, err := parseUpdates(context.Background(), strings.NewReader(input))
 	if err != nil {
 		t.Fatal(err)
 	}
-	serialized, err := json.Marshal(messages)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := string(serialized)
-	if strings.Contains(got, `"text":"discard"`) || !strings.Contains(got, "replacement result") || !strings.Contains(got, "visible suppressed result") {
-		t.Fatalf("messages after rewind = %s", got)
+	if len(messages) != 3 || messages[0].Text != "keep" || messages[1].Text != "replacement" ||
+		messages[2].Text != "replacement answer" {
+		t.Fatalf("messages after rewind = %#v", messages)
 	}
 }
 

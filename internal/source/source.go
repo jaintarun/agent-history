@@ -20,6 +20,8 @@ type Candidate struct {
 	Size            int64
 	ModTime         time.Time
 	Archived        bool
+	// NormalizerVersion forces a one-time reread when the import policy changes.
+	NormalizerVersion string
 	// Excluded removes a previously imported provider-internal session.
 	Excluded bool
 }
@@ -28,6 +30,8 @@ type Candidate struct {
 type ImportedSession struct {
 	Session  store.Session
 	Messages []store.Message
+	// NormalizerVersion also applies to explicit per-session rescans.
+	NormalizerVersion string
 }
 
 // ResumeSpec is a trusted structured command produced by a source adapter.

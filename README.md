@@ -114,7 +114,8 @@ model in **Settings**, then use **Scan** or wait for the background scanner.
   sessions marked as subagents and rewound conversation branches are excluded.
 - Removes private reasoning, thinking blocks, system/developer instructions,
   injected instruction envelopes, and transport metadata before persistence.
-- Stores visible user/assistant text and bounded useful tool facts in SQLite.
+- Stores visible user/assistant text in SQLite. Grok imports conversation only;
+  Codex and Claude retain bounded tool facts.
 - Generates a session title, overview, chronological topic summaries, and
   detailed topic evidence.
 - Reuses sealed summaries when a multi-day session grows, analyzing only new
@@ -140,6 +141,11 @@ searched, which keeps results focused.
 Grok is deliberately absent from this table: it is a transcript source and
 resume target only. Grok sessions are summarized with whichever Codex or Claude
 Code analyzer is selected in **Settings**.
+
+After upgrading from a tool-inclusive Grok import, the next scan removes old
+tool messages and their search entries. Affected summaries and titles are
+cleared and rebuilt by background analysis when it is enabled; otherwise use
+**Reanalyze** for those sessions.
 
 Provider executables are detected when the service starts. Install a missing
 CLI, authenticate it, then rerun `./install-startup.sh`. Agent History does not

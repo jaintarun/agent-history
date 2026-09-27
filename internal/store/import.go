@@ -33,6 +33,16 @@ func (s *Store) SessionSourceState(ctx context.Context, agent, nativeSessionID s
 // ImportSession atomically refreshes source metadata, normalized messages, FTS
 // documents, and summary nodes invalidated by a transcript rewrite.
 func (s *Store) ImportSession(ctx context.Context, session Session, messages []Message) (ImportResult, error) {
+	return s.importSession(ctx, session, messages, false)
+}
+
+// ImportSessionReplacingAnalysis clears analysis when a new normalization
+// policy changes stored messages, in the same transaction as the import.
+func (s *Store) ImportSessionReplacingAnalysis(ctx context.Context, session Session, messages []Message) (ImportResult, error) {
+	return s.importSession(ctx, session, messages, true)
+}
+
+func (s *Store) importSession(ctx context.Context, session Session, messages []Message, resetAnalysis bool) (ImportResult, error) {
 	if err := s.acquireWriter(ctx); err != nil {
 		return ImportResult{}, err
 	}
@@ -57,6 +67,11 @@ func (s *Store) ImportSession(ctx context.Context, session Session, messages []M
 	if err := upsertSession(ctx, tx, session); err != nil {
 		return ImportResult{}, err
 	}
+	if changed && resetAnalysis {
+		if err := clearAnalysisInTx(ctx, tx, session.ID); err != nil {
+			return ImportResult{}, err
+		}
+	}
 	appendOnly := existed && previousCWD == session.WorkingDirectory &&
 		firstChanged == len(previous) && len(messages) > len(previous)
 	switch {
@@ -70,8 +85,14 @@ func (s *Store) ImportSession(ctx context.Context, session Session, messages []M
 		if err := insertMessages(ctx, tx, session.ID, messages[firstChanged:]); err != nil {
 			return ImportResult{}, err
 		}
-		if err := insertMessageFTS(ctx, tx, session.ID, session.WorkingDirectory, messages[firstChanged:]); err != nil {
-			return ImportResult{}, err
+		if resetAnalysis {
+			if err := rebuildSessionFTS(ctx, tx, session.ID); err != nil {
+				return ImportResult{}, err
+			}
+		} else {
+			if err := insertMessageFTS(ctx, tx, session.ID, session.WorkingDirectory, messages[firstChanged:]); err != nil {
+				return ImportResult{}, err
+			}
 		}
 	default:
 		if _, err := tx.ExecContext(ctx, `DELETE FROM messages WHERE session_id = ?`, session.ID); err != nil {

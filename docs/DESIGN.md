@@ -236,10 +236,11 @@ assistant
 tool
 ```
 
-The normalizer retains visible user and assistant text verbatim. Tool commands
-and bounded tool output are retained to make errors, filenames, tests, and shell
-commands searchable. Fixed internal size limits prevent single tool results
-from dominating the database.
+The normalizer retains visible user and assistant text verbatim. Codex and
+Claude retain bounded tool commands and output. Grok retains only the main
+conversation; its tool calls and results are neither stored nor indexed.
+Fixed internal size limits prevent retained tool results from dominating the
+database.
 
 The normalizer discards:
 
@@ -251,6 +252,14 @@ The normalizer discards:
 
 Filtering is verified with provider-specific fixtures so hidden content cannot
 silently enter analysis prompts or search results.
+
+When a Grok session stored by the earlier tool-inclusive normalizer is
+rescanned, the new normalization version forces one reimport even if the source
+file is unchanged. If normalized messages change, the import atomically removes
+tool records, their FTS rows, and analysis generated from the old transcript.
+When automatic analysis is enabled, it then rebuilds summaries from the
+conversation. Sessions whose normalized messages do not change keep their
+existing analysis.
 
 ### Turns and analysis projection
 

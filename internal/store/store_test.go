@@ -554,6 +554,30 @@ func TestImportSessionMetadataOnlyPreservesFTSRows(t *testing.T) {
 	}
 }
 
+func TestImportSessionReplacingAnalysisAppendRemovesOldSummaryFromFTS(t *testing.T) {
+	database := openTestStore(t)
+	ctx := context.Background()
+	session := testSession("normalizer-update")
+	messages := []Message{{Sequence: 0, Timestamp: session.StartedAt, Role: "user", Text: "visible request"}}
+	if _, err := database.ImportSession(ctx, session, messages); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.ReplaceAnalysis(ctx, session.ID, Analysis{
+		Title: "Old title", Summary: "oldtoolkeyword", Provider: "fake", Model: "test",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	assertFTSCount(t, database, "oldtoolkeyword", 1)
+	messages = append(messages, Message{
+		Sequence: 1, Timestamp: session.LastActiveAt.Add(time.Minute), Role: "assistant", Text: "cleananswerkeyword",
+	})
+	if _, err := database.ImportSessionReplacingAnalysis(ctx, session, messages); err != nil {
+		t.Fatal(err)
+	}
+	assertFTSCount(t, database, "oldtoolkeyword", 0)
+	assertFTSCount(t, database, "cleananswerkeyword", 1)
+}
+
 func TestImportSessionAppendWithWorkingDirectoryChangeRefreshesFTS(t *testing.T) {
 	database := openTestStore(t)
 	ctx := context.Background()

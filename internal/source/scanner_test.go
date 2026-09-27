@@ -171,6 +171,145 @@ func TestGrokScanRemovesPreviouslyImportedSubagentSessions(t *testing.T) {
 	}
 }
 
+func TestGrokScanReimportsLegacyToolsAndClearsDerivedAnalysis(t *testing.T) {
+	ctx := context.Background()
+	home := t.TempDir()
+	directory := filepath.Join(home, "sessions", "%2FUsers%2Fexample%2Fwork", "01a00000-0000-7000-8000-000000000001")
+	for _, name := range []string{"summary.json", "updates.jsonl"} {
+		copyFile(t, filepath.Join("grok", "testdata", "basic", name), filepath.Join(directory, name))
+	}
+	path := filepath.Join(directory, "updates.jsonl")
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	databasePath := filepath.Join(t.TempDir(), "history.db")
+	database, err := store.Open(ctx, databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	adapter := grok.New(home)
+	imported, err := adapter.Read(ctx, source.Candidate{Path: path, Size: info.Size(), ModTime: info.ModTime()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	imported.Session.SourceHash = "legacy-unversioned-hash"
+	imported.Messages = []store.Message{
+		{Sequence: 0, Timestamp: time.Unix(1788256800, 0).UTC(), Role: "user", Text: "Implement Grok history import."},
+		{Sequence: 1, Timestamp: time.Unix(1788256810, 0).UTC(), Role: "tool", ToolName: "bash", Text: "legacytoolword command"},
+		{Sequence: 2, Timestamp: time.Unix(1788256820, 0).UTC(), Role: "tool", ToolName: "bash", Text: "legacytoolword output"},
+		{Sequence: 3, Timestamp: time.Unix(1788256830, 0).UTC(), Role: "assistant", Text: "Imported visible messages."},
+	}
+	if _, err := database.ImportSession(ctx, imported.Session, imported.Messages); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.ReplaceAnalysis(ctx, imported.Session.ID, store.Analysis{
+		Title: "Tool-derived title", Summary: "legacytoolword summary", Provider: "fake", Model: "test",
+		Segments: []store.Segment{{Position: 0, StartSequence: 0, EndSequence: 3,
+			Title: "Tool-derived topic", Summary: "legacytoolword topic", Detail: "legacytoolword detail"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	scanner := source.NewScanner(database, adapter)
+	first, err := scanner.Scan(ctx, "grok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Imported != 1 {
+		t.Fatalf("first scan = %#v", first)
+	}
+	detail, err := database.GetSession(ctx, imported.Session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(detail.Messages) != 2 || detail.Messages[0].Role != "user" || detail.Messages[1].Role != "assistant" {
+		t.Fatalf("stored messages = %#v", detail.Messages)
+	}
+	if detail.Session.AnalysisStatus != "none" || detail.Session.Title != "" ||
+		detail.Session.Summary != "" || len(detail.Segments) != 0 {
+		t.Fatalf("stale analysis remains: %#v", detail)
+	}
+	assertNoFTSMatch(t, databasePath, "legacytoolword")
+
+	second, err := scanner.Scan(ctx, "grok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Skipped != 1 || second.Imported != 0 {
+		t.Fatalf("unchanged scan = %#v", second)
+	}
+
+	if _, err := database.ImportSession(ctx, imported.Session, imported.Messages); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.ReplaceAnalysis(ctx, imported.Session.ID, store.Analysis{
+		Title: "Rescan tool title", Summary: "legacytoolword rescan", Provider: "fake", Model: "test",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scanner.Rescan(ctx, imported.Session.ID); err != nil {
+		t.Fatal(err)
+	}
+	assertNoFTSMatch(t, databasePath, "legacytoolword")
+	detail, err = database.GetSession(ctx, imported.Session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(detail.Messages) != 2 || detail.Session.AnalysisStatus != "none" {
+		t.Fatalf("rescan retained legacy content: %#v", detail)
+	}
+}
+
+func TestGrokNormalizerRefreshPreservesAnalysisWhenMessagesUnchanged(t *testing.T) {
+	ctx := context.Background()
+	home := t.TempDir()
+	directory := filepath.Join(home, "sessions", "%2FUsers%2Fexample%2Fwork", "01a00000-0000-7000-8000-000000000001")
+	for _, name := range []string{"summary.json", "updates.jsonl"} {
+		copyFile(t, filepath.Join("grok", "testdata", "basic", name), filepath.Join(directory, name))
+	}
+	path := filepath.Join(directory, "updates.jsonl")
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	database, err := store.Open(ctx, filepath.Join(t.TempDir(), "history.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	adapter := grok.New(home)
+	imported, err := adapter.Read(ctx, source.Candidate{Path: path, Size: info.Size(), ModTime: info.ModTime()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	imported.Session.SourceHash = "legacy-unversioned-hash"
+	if _, err := database.ImportSession(ctx, imported.Session, imported.Messages); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.ReplaceAnalysis(ctx, imported.Session.ID, store.Analysis{
+		Title: "Clean conversation title", Summary: "Clean conversation summary", Provider: "fake", Model: "test",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	scanner := source.NewScanner(database, adapter)
+	report, err := scanner.Scan(ctx, "grok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.MetadataOnly != 1 {
+		t.Fatalf("normalizer refresh = %#v", report)
+	}
+	detail, err := database.GetSession(ctx, imported.Session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail.Session.AnalysisStatus != "current" || detail.Session.Title != "Clean conversation title" {
+		t.Fatalf("unchanged analysis was cleared: %#v", detail.Session)
+	}
+}
+
 func writeGrokSummary(t *testing.T, directory, id, kind string) {
 	t.Helper()
 	summary := map[string]any{
