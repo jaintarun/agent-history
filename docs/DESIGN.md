@@ -74,8 +74,7 @@ only invoke a resume specification created by a trusted source adapter.
 ### Included
 
 - Discover local Codex, Claude Code, and Grok session transcripts.
-- Normalize visible user text, visible assistant text, useful tool commands,
-  and bounded tool results.
+- Normalize visible user and assistant text without retaining tool activity.
 - Exclude reasoning, thinking blocks, system prompts, and injected instruction
   envelopes.
 - Store session metadata and normalized messages in SQLite.
@@ -147,8 +146,8 @@ The main screen is a dense search/detail split view:
 ```
 
 Search and filters update the result list. Selecting a topic shows its detailed
-summary and referenced messages. The conversation view shows normalized visible
-messages and can optionally reveal retained tool activity.
+summary and referenced messages. The main conversation is collapsed by default
+and loaded only when opened.
 
 ### Session actions
 
@@ -234,14 +233,11 @@ The normalized message roles are:
 ```text
 user
 assistant
-tool
 ```
 
-The normalizer retains visible user and assistant text verbatim. Codex and
-Claude retain bounded tool commands and output. Grok retains only the main
-conversation; its tool calls and results are neither stored nor indexed.
-Fixed internal size limits prevent retained tool results from dominating the
-database.
+The normalizer retains visible user and assistant text verbatim for Codex,
+Claude, and Grok. Tool calls and results are neither stored nor indexed. The
+source transcript remains authoritative for any future reimport.
 
 The normalizer discards:
 
@@ -249,36 +245,31 @@ The normalizer discards:
 - system and developer instructions;
 - environment and permission envelopes;
 - empty events and transport metadata; and
-- tool output beyond the fixed retention limit.
+- tool calls, results, and transport notifications.
 
 Filtering is verified with provider-specific fixtures so hidden content cannot
 silently enter analysis prompts or search results.
 
-When a Grok session stored by the earlier tool-inclusive normalizer is
-rescanned, the new normalization version forces one reimport even if the source
-file is unchanged. If normalized messages change, the import atomically removes
-tool records, their FTS rows, and analysis generated from the old transcript.
-When automatic analysis is enabled, it then rebuilds summaries from the
-conversation. Sessions whose normalized messages do not change keep their
-existing analysis.
+When a session stored by an earlier tool-inclusive normalizer is rescanned,
+the versioned normalizer forces one reimport even if the source file is
+unchanged. If normalized messages change, the import atomically removes tool
+records, their FTS rows, and analysis generated from the old transcript. When
+automatic analysis is enabled, one serialized worker rebuilds summaries from
+the conversation in bounded queue batches. Sessions whose normalized messages
+do not change keep their existing analysis.
 
 ### Turns and analysis projection
 
 The analysis worker groups normalized records into natural turns: one user
-request, the visible assistant response around it, related tool activity, and
-the resulting assistant conclusion. Topic boundaries are never created merely
-because midnight or an idle timeout occurred.
+request and related assistant responses. Topic boundaries are never created
+merely because midnight or an idle timeout occurred.
 
 The worker then builds a compact analysis projection without changing the
 stored conversation:
 
 - preserve meaningful user messages and visible assistant text;
-- reduce tool calls to command, file, and exit-status facts;
-- keep error lines with bounded surrounding context;
-- reduce diffs to files and change statistics unless their text is directly
-  discussed;
-- collapse repeated log lines and identical content; and
-- replace repeated material with a count and content reference.
+- select the first and latest assistant responses in a long turn; and
+- bound each projected message before sending it to the analyzer.
 
 SQLite and FTS retain the normalized visible text. The compact projection is
 used only as model input, so token reduction does not weaken exact transcript
@@ -547,7 +538,7 @@ or a later operating-system credential store.
 #### `session_fts`
 
 FTS documents cover generated titles and summaries, topic text, visible
-messages, retained tool activity, and working directories. Results are grouped
+user/assistant messages, and working directories. Results are grouped
 by session. Default keyword search admits generated session and topic documents,
 all normalized messages for sessions without stored analysis, and only messages
 after the analyzed-through position for partial sessions. An explicit
@@ -576,7 +567,7 @@ limit
 ```
 
 The UI supplies presets for 7 days, 30 days, 3 months, 6 months, 1 year, and all
-time. **Include full conversations** controls the explicit message scope and is
+time. **Include main conversation** controls the explicit message scope and is
 stored in the URL, not application settings. A facets response supplies agent
 counts, common working directories, analysis-state counts, and the available
 date range.

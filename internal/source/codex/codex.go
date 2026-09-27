@@ -3,7 +3,6 @@ package codex
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -18,16 +17,14 @@ import (
 	"sort"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/jaintarun/agent-history/internal/source"
 	"github.com/jaintarun/agent-history/internal/store"
 )
 
 const (
-	timestampLayout  = time.RFC3339Nano
-	maxToolText      = 64 << 10
-	truncationMarker = "\n[tool output truncated]"
+	timestampLayout               = time.RFC3339Nano
+	conversationNormalizerVersion = "codex-conversation-v1"
 )
 
 var errNoMetadata = errors.New("codex: session metadata not found")
@@ -100,7 +97,8 @@ func (a *Adapter) Discover(ctx context.Context) ([]source.Candidate, error) {
 			candidate := source.Candidate{
 				Agent: "codex", NativeSessionID: meta.ID, Path: path,
 				Size: info.Size(), ModTime: info.ModTime().UTC(), Archived: root.archived,
-				Excluded: meta.IsSubagent,
+				Excluded:          meta.IsSubagent,
+				NormalizerVersion: conversationNormalizerVersion,
 			}
 			current, exists := byID[meta.ID]
 			if !exists || (current.Archived && !candidate.Archived) ||
@@ -121,8 +119,7 @@ func (a *Adapter) Discover(ctx context.Context) ([]source.Candidate, error) {
 	return candidates, nil
 }
 
-// Read parses a rollout completely and retains only visible conversation and
-// bounded tool activity.
+// Read parses a rollout completely and retains only visible conversation.
 func (a *Adapter) Read(ctx context.Context, candidate source.Candidate) (source.ImportedSession, error) {
 	file, err := os.Open(candidate.Path)
 	if err != nil {
@@ -165,11 +162,11 @@ func (a *Adapter) Read(ctx context.Context, candidate source.Candidate) (source.
 		Session: store.Session{
 			ID: sessionID, Agent: "codex", NativeSessionID: parsed.meta.ID,
 			SourcePath: candidate.Path, SourceSize: candidate.Size,
-			SourceMTime: candidate.ModTime.UTC(), SourceHash: hashString(hasher),
+			SourceMTime: candidate.ModTime.UTC(), SourceHash: conversationNormalizerVersion + ":" + hashString(hasher),
 			WorkingDirectory: parsed.meta.CWD, StartedAt: startedAt.UTC(),
 			LastActiveAt: lastActiveAt.UTC(), AnalysisStatus: "none",
 		},
-		Messages: parsed.messages,
+		Messages: parsed.messages, NormalizerVersion: conversationNormalizerVersion,
 	}, nil
 }
 
@@ -192,8 +189,10 @@ type metadata struct {
 }
 
 type parsedRollout struct {
-	meta     metadata
-	messages []store.Message
+	meta             metadata
+	messages         []store.Message
+	eventMessages    []store.Message
+	responseMessages []store.Message
 }
 
 type envelope struct {
@@ -205,7 +204,6 @@ type envelope struct {
 func parseRollout(ctx context.Context, input io.Reader) (parsedRollout, error) {
 	reader := bufio.NewReader(input)
 	var parsed parsedRollout
-	toolNames := make(map[string]string)
 	lineNumber := 0
 	for {
 		line, readErr := source.ReadJSONLRecord(reader)
@@ -219,7 +217,7 @@ func parseRollout(ctx context.Context, input io.Reader) (parsedRollout, error) {
 				}
 				return parsedRollout{}, fmt.Errorf("decode line %d: %w", lineNumber, err)
 			}
-			if err := consumeRecord(&parsed, toolNames, record); err != nil {
+			if err := consumeRecord(&parsed, record); err != nil {
 				return parsedRollout{}, fmt.Errorf("line %d: %w", lineNumber, err)
 			}
 		}
@@ -233,6 +231,26 @@ func parseRollout(ctx context.Context, input io.Reader) (parsedRollout, error) {
 			return parsedRollout{}, readErr
 		}
 	}
+	for _, role := range []string{"user", "assistant"} {
+		selected := parsed.responseMessages
+		for _, message := range parsed.eventMessages {
+			if message.Role == role {
+				selected = parsed.eventMessages
+				break
+			}
+		}
+		for _, message := range selected {
+			if message.Role == role {
+				parsed.messages = append(parsed.messages, message)
+			}
+		}
+	}
+	sort.SliceStable(parsed.messages, func(i, j int) bool {
+		return parsed.messages[i].Timestamp.Before(parsed.messages[j].Timestamp)
+	})
+	for i := range parsed.messages {
+		parsed.messages[i].Sequence = i
+	}
 	return parsed, nil
 }
 
@@ -241,7 +259,7 @@ func readerAtEOF(reader *bufio.Reader) bool {
 	return errors.Is(err, io.EOF)
 }
 
-func consumeRecord(parsed *parsedRollout, toolNames map[string]string, record envelope) error {
+func consumeRecord(parsed *parsedRollout, record envelope) error {
 	timestamp, err := parseTimestamp(record.Timestamp)
 	if err != nil {
 		return err
@@ -292,55 +310,45 @@ func consumeRecord(parsed *parsedRollout, toolNames map[string]string, record en
 			role = "assistant"
 		}
 		if role != "" && strings.TrimSpace(payload.Message) != "" {
-			appendMessage(parsed, timestamp, role, payload.Message, "")
+			parsed.eventMessages = append(parsed.eventMessages, store.Message{Timestamp: timestamp, Role: role, Text: payload.Message})
 		}
 	case "response_item":
-		return consumeResponseItem(parsed, toolNames, timestamp, record.Payload)
+		return consumeResponseItem(parsed, timestamp, record.Payload)
 	}
 	return nil
 }
 
-func consumeResponseItem(parsed *parsedRollout, toolNames map[string]string, timestamp time.Time, raw json.RawMessage) error {
+func consumeResponseItem(parsed *parsedRollout, timestamp time.Time, raw json.RawMessage) error {
 	var payload struct {
-		Type      string          `json:"type"`
-		Name      string          `json:"name"`
-		CallID    string          `json:"call_id"`
-		Arguments json.RawMessage `json:"arguments"`
-		Input     json.RawMessage `json:"input"`
-		Output    json.RawMessage `json:"output"`
-		Action    json.RawMessage `json:"action"`
-		Tools     json.RawMessage `json:"tools"`
+		Type    string `json:"type"`
+		Role    string `json:"role"`
+		Content []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
 	}
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return err
 	}
-	switch payload.Type {
-	case "function_call", "custom_tool_call":
-		toolNames[payload.CallID] = payload.Name
-		arguments := payload.Arguments
-		if payload.Type == "custom_tool_call" {
-			arguments = payload.Input
+	if payload.Type != "message" || (payload.Role != "user" && payload.Role != "assistant") {
+		return nil
+	}
+	contentType := "input_text"
+	if payload.Role == "assistant" {
+		contentType = "output_text"
+	}
+	var texts []string
+	for _, block := range payload.Content {
+		if block.Type == contentType && strings.TrimSpace(block.Text) != "" {
+			texts = append(texts, block.Text)
 		}
-		text := strings.TrimSpace(payload.Name + " " + rawText(arguments))
-		appendMessage(parsed, timestamp, "tool", boundToolText(text), payload.Name)
-	case "function_call_output", "custom_tool_call_output":
-		appendMessage(parsed, timestamp, "tool", boundToolText(rawText(payload.Output)), toolNames[payload.CallID])
-	case "tool_search_call":
-		toolNames[payload.CallID] = "tool_search"
-		appendMessage(parsed, timestamp, "tool", boundToolText("tool_search "+rawText(payload.Arguments)), "tool_search")
-	case "tool_search_output":
-		appendMessage(parsed, timestamp, "tool", boundToolText(rawText(payload.Tools)), toolNames[payload.CallID])
-	case "web_search_call":
-		appendMessage(parsed, timestamp, "tool", boundToolText("web_search "+rawText(payload.Action)), "web_search")
+	}
+	if len(texts) != 0 {
+		parsed.responseMessages = append(parsed.responseMessages, store.Message{
+			Timestamp: timestamp, Role: payload.Role, Text: strings.Join(texts, "\n"),
+		})
 	}
 	return nil
-}
-
-func appendMessage(parsed *parsedRollout, timestamp time.Time, role, text, toolName string) {
-	parsed.messages = append(parsed.messages, store.Message{
-		Sequence: len(parsed.messages), Timestamp: timestamp.UTC(), Role: role,
-		Text: text, ToolName: toolName,
-	})
 }
 
 func readMetadata(path string) (metadata, error) {
@@ -363,7 +371,7 @@ func readMetadata(path string) (metadata, error) {
 			}
 			if record.Type == "session_meta" {
 				parsed := parsedRollout{}
-				if err := consumeRecord(&parsed, map[string]string{}, record); err != nil {
+				if err := consumeRecord(&parsed, record); err != nil {
 					return metadata{}, err
 				}
 				if parsed.meta.ID == "" {
@@ -379,32 +387,6 @@ func readMetadata(path string) (metadata, error) {
 			return metadata{}, readErr
 		}
 	}
-}
-
-func rawText(raw json.RawMessage) string {
-	if len(raw) == 0 || string(raw) == "null" {
-		return ""
-	}
-	var text string
-	if json.Unmarshal(raw, &text) == nil {
-		return text
-	}
-	var compact bytes.Buffer
-	if err := json.Compact(&compact, raw); err == nil {
-		return compact.String()
-	}
-	return string(raw)
-}
-
-func boundToolText(text string) string {
-	if len(text) <= maxToolText {
-		return text
-	}
-	end := maxToolText
-	for end > 0 && !utf8.RuneStart(text[end]) {
-		end--
-	}
-	return text[:end] + truncationMarker
 }
 
 func parseTimestamp(value string) (time.Time, error) {

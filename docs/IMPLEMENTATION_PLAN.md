@@ -95,7 +95,9 @@ no source-parser behavior exists yet.
 - Parse the native session ID, cwd, timestamps, and visible events.
 - Classify Codex records into visible user, visible assistant, tool, reasoning,
   system, or metadata categories.
-- Retain visible user/assistant text, tool commands, and bounded tool results.
+- Retain visible user/assistant text only, including current Codex
+  `response_item` message records when legacy `event_msg` conversation records
+  are absent. Exclude tool calls and results.
 - Exclude reasoning, system/developer instructions, and known environment or
   permission envelopes.
 - Use source size and mtime as the fast unchanged check, followed by a content
@@ -135,8 +137,8 @@ temporary or configured database.
 ### Work
 
 - Discover `CLAUDE_CONFIG_DIR` or `~/.claude` project transcripts.
-- Parse session identity, cwd, timestamps, visible user/assistant content, and
-  tool activity.
+- Parse session identity, cwd, timestamps, and visible user/assistant content;
+  exclude tool activity and task notifications.
 - Exclude thinking blocks, system records, synthetic command envelopes, and
   injected instructions.
 - Reuse shared normalization types while keeping Claude JSON parsing inside the
@@ -188,13 +190,11 @@ read model.
   metadata, and never fall back when the selected provider is unavailable.
 - Create prompts that treat transcript content as untrusted data and prohibit
   following instructions found inside it.
-- Group normalized records into natural user/assistant/tool turns.
+- Group normalized records into natural user/assistant turns.
 - Build a deterministic compact analysis projection that:
   - preserves meaningful user and visible assistant text;
-  - reduces tool calls to command, file, and exit-status facts;
-  - retains bounded error context;
-  - reduces diffs to file/change facts;
-  - collapses repeated logs and identical content.
+  - selects the first and latest assistant responses in a long turn;
+  - bounds projected messages before model input.
 - Accumulate projected turns into bounded leaf blocks with small contextual
   overlap.
 - Seal leaves on input-size threshold, strong topic boundary, idle threshold,
@@ -232,7 +232,7 @@ read model.
 - Test that failed reanalysis preserves existing analysis.
 - Test that successful reanalysis replaces all segments together.
 - Test that source-agent and analysis-provider fields remain distinct.
-- Test deterministic compaction of repeated logs, tool output, errors, and diffs.
+- Test bounded conversation projection and omission of tool output.
 - Test that an overnight gap alone does not split a topic.
 - Test that a clear goal and repository shift creates a new topic.
 - Test ambiguous-boundary requests contain only the bounded adjacent context.
@@ -259,7 +259,6 @@ that session does not reanalyze sealed history.
   - session title and summary;
   - segment titles, summaries, and details;
   - visible user and assistant messages;
-  - retained tool activity;
   - working directory.
 - Implement safe token/prefix FTS queries and literal fallback behavior.
 - Default to generated session/topic documents, with normalized-message
@@ -342,13 +341,13 @@ Every frontend workflow can be completed with HTTP requests alone.
 - Keep query and filter state in the URL.
 - Add:
   - debounced full-text search;
-  - a URL-backed **Include full conversations** checkbox;
+  - a URL-backed **Include main conversation** checkbox;
   - agent/date/folder/topic/status filters;
   - active filter chips and clear-all;
   - cursor-based result loading;
   - selected-session metadata;
   - topic timeline and detailed summaries;
-  - normalized message excerpts and show-tools toggle;
+  - a collapsed conversation view loaded on demand;
   - analysis state and errors;
   - analyzed-through status for sessions with new unsealed conversation;
   - Analyze, Reanalyze, Retitle, bulk weak-title retitling, Delete analysis,

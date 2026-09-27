@@ -36,10 +36,27 @@ func TestReadNormalizesVisibleRecords(t *testing.T) {
 		t.Fatalf("normalized messages differ\ngot:\n%s\nwant:\n%s", got, want)
 	}
 	serialized := string(got)
+	for _, message := range imported.Messages {
+		if message.Role == "tool" {
+			t.Fatalf("tool message was retained: %#v", message)
+		}
+	}
 	for _, hidden := range []string{"private reasoning", "system instructions", "injected instruction", "hidden subagent", "hidden reminder", "command-name"} {
 		if strings.Contains(serialized, hidden) {
 			t.Errorf("normalized messages contain hidden text %q", hidden)
 		}
+	}
+}
+
+func TestReadOmitsTaskNotification(t *testing.T) {
+	content := `{"type":"user","sessionId":"notification","cwd":"/tmp/project","timestamp":"2026-07-03T10:00:00Z","message":{"content":"<task-notification><status>killed</status><summary>Background command stopped</summary></task-notification>"}}` + "\n" +
+		`{"type":"user","sessionId":"notification","cwd":"/tmp/project","timestamp":"2026-07-03T10:01:00Z","message":{"content":"Please restart the app"}}` + "\n"
+	parsed, err := parseTranscript(context.Background(), strings.NewReader(content))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parsed.messages) != 1 || parsed.messages[0].Text != "Please restart the app" {
+		t.Fatalf("messages = %#v", parsed.messages)
 	}
 }
 

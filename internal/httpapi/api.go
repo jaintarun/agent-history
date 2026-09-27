@@ -294,7 +294,7 @@ func (h *handler) facets(response http.ResponseWriter, request *http.Request) {
 }
 
 func (h *handler) sessionDetail(response http.ResponseWriter, request *http.Request) {
-	detail, err := h.store.GetSession(request.Context(), request.PathValue("id"))
+	detail, err := h.store.GetSessionOverview(request.Context(), request.PathValue("id"))
 	if err != nil {
 		h.storeError(response, err)
 		return
@@ -315,23 +315,23 @@ func (h *handler) sessionDetail(response http.ResponseWriter, request *http.Requ
 }
 
 func (h *handler) messages(response http.ResponseWriter, request *http.Request) {
-	detail, err := h.store.GetSession(request.Context(), request.PathValue("id"))
+	messages, err := h.store.GetSessionMessages(request.Context(), request.PathValue("id"))
 	if err != nil {
 		h.storeError(response, err)
 		return
 	}
 	includeTools := request.URL.Query().Get("include_tools") != "false"
-	messages := make([]messageResponse, 0, len(detail.Messages))
-	for _, message := range detail.Messages {
+	result := make([]messageResponse, 0, len(messages))
+	for _, message := range messages {
 		if message.Role == "tool" && !includeTools {
 			continue
 		}
-		messages = append(messages, messageResponse{
+		result = append(result, messageResponse{
 			Sequence: message.Sequence, Timestamp: formatAPITime(message.Timestamp),
 			Role: message.Role, Text: message.Text, ToolName: message.ToolName,
 		})
 	}
-	writeJSON(response, http.StatusOK, map[string]any{"messages": messages})
+	writeJSON(response, http.StatusOK, map[string]any{"messages": result})
 }
 
 func (h *handler) analyze(response http.ResponseWriter, request *http.Request) {

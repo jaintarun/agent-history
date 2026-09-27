@@ -11,6 +11,8 @@ import (
 var (
 	// ErrAlreadyQueued prevents duplicate paid work for one session.
 	ErrAlreadyQueued = errors.New("analysis is already queued or running")
+	// ErrQueueFull leaves the session eligible for a later background pass.
+	ErrQueueFull = errors.New("analysis queue is full")
 	// ErrNoVisibleMessages rejects sessions that contain nothing safe to analyze.
 	ErrNoVisibleMessages = errors.New("session has no visible messages to analyze")
 	// ErrNoTopics rejects retitling before a topic hierarchy exists.
@@ -68,7 +70,7 @@ func (w *Worker) Enqueue(ctx context.Context, sessionID string, options Options)
 	if len(detail.Messages) == 0 {
 		return nil, ErrNoVisibleMessages
 	}
-	return w.enqueue(ctx, sessionID, options, queueAnalysis)
+	return w.enqueue(ctx, sessionID, options, queueAnalysis, detail.Session.AnalysisStatus, detail.Session.AnalysisError)
 }
 
 // EnqueueRetitle schedules one title-only model call through the same serialized
@@ -81,10 +83,10 @@ func (w *Worker) EnqueueRetitle(ctx context.Context, sessionID string, options O
 	if len(detail.Segments) == 0 {
 		return nil, ErrNoTopics
 	}
-	return w.enqueue(ctx, sessionID, options, queueRetitle)
+	return w.enqueue(ctx, sessionID, options, queueRetitle, detail.Session.AnalysisStatus, detail.Session.AnalysisError)
 }
 
-func (w *Worker) enqueue(ctx context.Context, sessionID string, options Options, kind queueKind) (<-chan error, error) {
+func (w *Worker) enqueue(ctx context.Context, sessionID string, options Options, kind queueKind, previousStatus, previousError string) (<-chan error, error) {
 	w.mu.Lock()
 	if w.pending[sessionID] {
 		w.mu.Unlock()
@@ -113,6 +115,12 @@ func (w *Worker) enqueue(ctx context.Context, sessionID string, options Options,
 	case <-w.ctx.Done():
 		removePending()
 		return nil, errors.New("analysis worker is closed")
+	default:
+		removePending()
+		if err := w.store.SetAnalysisStatus(context.WithoutCancel(ctx), sessionID, previousStatus, previousError); err != nil {
+			return nil, err
+		}
+		return nil, ErrQueueFull
 	}
 }
 

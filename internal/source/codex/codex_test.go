@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -42,10 +43,47 @@ func TestReadNormalizesVisibleRecords(t *testing.T) {
 		t.Fatalf("normalized messages differ\ngot:\n%s\nwant:\n%s", got, want)
 	}
 	serialized := string(got)
+	for _, message := range imported.Messages {
+		if message.Role == "tool" {
+			t.Fatalf("tool message was retained: %#v", message)
+		}
+	}
 	for _, hidden := range []string{"chain of thought", "developer instructions", "injected instructions", "duplicate user", "duplicate assistant"} {
 		if strings.Contains(serialized, hidden) {
 			t.Errorf("normalized messages contain hidden or duplicate text %q", hidden)
 		}
+	}
+}
+
+func TestReadCurrentResponseItemConversation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "current.jsonl")
+	content := strings.Join([]string{
+		`{"timestamp":"2026-07-01T10:00:00Z","type":"session_meta","payload":{"id":"current","cwd":"/tmp/project"}}`,
+		`{"timestamp":"2026-07-01T10:01:00Z","type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"hidden policy"}]}}`,
+		`{"timestamp":"2026-07-01T10:02:00Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Build the app"}]}}`,
+		`{"timestamp":"2026-07-01T10:03:00Z","type":"response_item","payload":{"type":"reasoning","content":[{"type":"reasoning_text","text":"hidden reasoning"}]}}`,
+		`{"timestamp":"2026-07-01T10:04:00Z","type":"response_item","payload":{"type":"function_call_output","output":"hidden tool output"}}`,
+		`{"timestamp":"2026-07-01T10:05:00Z","type":"response_item","payload":{"type":"message","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"Working on it"}]}}`,
+		`{"timestamp":"2026-07-01T10:06:00Z","type":"response_item","payload":{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"The app is running"}]}}`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	imported, err := New(t.TempDir()).Read(context.Background(), source.Candidate{Path: path, Size: info.Size(), ModTime: info.ModTime()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, message := range imported.Messages {
+		got = append(got, message.Role+":"+message.Text)
+	}
+	want := []string{"user:Build the app", "assistant:Working on it", "assistant:The app is running"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("messages = %#v, want %#v", got, want)
 	}
 }
 
@@ -144,9 +182,9 @@ func TestDiscoverExcludesSubagentSessions(t *testing.T) {
 	}
 }
 
-func TestReadBoundsToolOutput(t *testing.T) {
+func TestReadIgnoresLargeToolOutput(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "large.jsonl")
-	large := strings.Repeat("x", maxToolText+100)
+	large := strings.Repeat("x", 64<<10+100)
 	content := `{"timestamp":"2026-07-01T09:59:00Z","type":"session_meta","payload":{"id":"33333333-3333-4333-8333-333333333333","cwd":"/tmp/project"}}` + "\n" +
 		`{"timestamp":"2026-07-01T10:00:00Z","type":"event_msg","payload":{"type":"user_message","message":"Run it."}}` + "\n" +
 		`{"timestamp":"2026-07-01T10:01:00Z","type":"response_item","payload":{"type":"function_call_output","call_id":"unknown","output":` + mustJSON(t, large) + `}}` + "\n"
@@ -161,11 +199,8 @@ func TestReadBoundsToolOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := len(imported.Messages[1].Text); got > maxToolText+len(truncationMarker) {
-		t.Fatalf("bounded tool output length = %d", got)
-	}
-	if !strings.HasSuffix(imported.Messages[1].Text, truncationMarker) {
-		t.Fatalf("bounded tool output missing truncation marker")
+	if len(imported.Messages) != 1 || imported.Messages[0].Text != "Run it." {
+		t.Fatalf("messages = %#v, want only the user request", imported.Messages)
 	}
 }
 
@@ -188,7 +223,7 @@ func FuzzParseRollout(f *testing.F) {
 				t.Fatalf("message sequence = %d at position %d", message.Sequence, i)
 			}
 			switch message.Role {
-			case "user", "assistant", "tool":
+			case "user", "assistant":
 			default:
 				t.Fatalf("unexpected normalized role %q", message.Role)
 			}

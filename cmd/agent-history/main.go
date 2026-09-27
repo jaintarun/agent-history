@@ -275,6 +275,9 @@ func enqueuePendingAnalyses(ctx context.Context, database pendingAnalysisStore, 
 	var queueErrors []error
 	for _, id := range ids {
 		if _, err := queue.Enqueue(ctx, id, options); err != nil {
+			if errors.Is(err, analyze.ErrQueueFull) {
+				break
+			}
 			if !errors.Is(err, analyze.ErrAlreadyQueued) {
 				queueErrors = append(queueErrors, fmt.Errorf("queue session %s: %w", id, err))
 			}

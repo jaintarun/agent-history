@@ -82,6 +82,60 @@ func TestWorkerRejectsSessionWithoutVisibleMessages(t *testing.T) {
 	}
 }
 
+func TestWorkerFullQueueLeavesSessionPending(t *testing.T) {
+	database, first := analysisFixture(t)
+	for _, id := range []string{"second", "third"} {
+		session := first
+		session.ID = id
+		session.NativeSessionID = "native-" + id
+		session.SourcePath = "/tmp/" + id + ".jsonl"
+		if _, err := database.ImportSession(context.Background(), session, analysisMessages()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	analyzer := &blockingAnalyzer{started: make(chan struct{}), release: make(chan struct{})}
+	worker := NewWorker(database, NewEngine(database, map[string]Analyzer{"tracking": analyzer}), 1)
+	t.Cleanup(worker.Close)
+	options := Options{Provider: "tracking", Model: "test", PromptVersion: "v1", NormalizerVersion: "v1", LeafTargetChars: 10_000, RollupFanout: 8}
+	if _, err := worker.Enqueue(context.Background(), first.ID, options); err != nil {
+		t.Fatal(err)
+	}
+	<-analyzer.started
+	if _, err := worker.Enqueue(context.Background(), "second", options); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if _, err := worker.Enqueue(ctx, "third", options); !errors.Is(err, ErrQueueFull) {
+		t.Fatalf("full queue error = %v, want ErrQueueFull", err)
+	}
+	detail, err := database.GetSession(context.Background(), "third")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail.Session.AnalysisStatus != "none" {
+		t.Fatalf("third session status = %q, want none", detail.Session.AnalysisStatus)
+	}
+	close(analyzer.release)
+}
+
+type blockingAnalyzer struct {
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+	tracker trackingAnalyzer
+}
+
+func (a *blockingAnalyzer) Generate(ctx context.Context, model string, request StructuredRequest) (json.RawMessage, error) {
+	a.once.Do(func() { close(a.started) })
+	select {
+	case <-a.release:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	return a.tracker.Generate(ctx, model, request)
+}
+
 func TestWorkerQueuesRetitleAfterAnalysis(t *testing.T) {
 	database, session := analysisFixture(t)
 	analyzer := &trackingAnalyzer{}

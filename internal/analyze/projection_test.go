@@ -28,24 +28,21 @@ func TestBuildTurnsGroupsUserAssistantAndTools(t *testing.T) {
 	}
 }
 
-func TestCompactProjectionCollapsesRepeatedLogsAndDiffBodies(t *testing.T) {
+func TestCompactProjectionOmitsToolContent(t *testing.T) {
 	turn := Turn{Messages: []store.Message{
 		{Sequence: 0, Role: "user", Text: "Run the tests."},
-		{Sequence: 1, Role: "tool", ToolName: "exec", Text: "same log\nsame log\nsame log\nerror: timeout\ncontext"},
-		{Sequence: 2, Role: "tool", ToolName: "apply_patch", Text: "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -1 +1 @@\n-old\n+new"},
+		{Sequence: 1, Role: "tool", ToolName: "exec", Text: "secret-tool-output"},
+		{Sequence: 2, Role: "assistant", Text: "The tests pass."},
 	}}
 
 	projection := CompactTurn(turn)
 
-	if !strings.Contains(projection, "same log [repeated 3 times]") {
-		t.Fatalf("projection did not collapse logs:\n%s", projection)
-	}
-	if !strings.Contains(projection, "diff files: a.go") || strings.Contains(projection, "-old") {
-		t.Fatalf("projection did not compact diff:\n%s", projection)
+	if strings.Contains(projection, "secret-tool-output") || !strings.Contains(projection, "The tests pass.") {
+		t.Fatalf("projection contains tool content or lost assistant reply:\n%s", projection)
 	}
 }
 
-func TestCompactProjectionBoundsToolHeavyTurnAndKeepsConclusion(t *testing.T) {
+func TestCompactProjectionBoundsLongTurnAndKeepsConclusion(t *testing.T) {
 	now := time.Date(2026, 7, 1, 10, 0, 0, 0, time.UTC)
 	turn := Turn{Messages: []store.Message{{Sequence: 0, Timestamp: now, Role: "user", Text: "Diagnose the production retry failure."}}}
 	for sequence := 1; sequence <= 100; sequence++ {
@@ -62,10 +59,13 @@ func TestCompactProjectionBoundsToolHeavyTurnAndKeepsConclusion(t *testing.T) {
 	if len(projection) > maxProjectedTurnChars {
 		t.Fatalf("tool-heavy projection length = %d", len(projection))
 	}
-	for _, required := range []string{"Diagnose the production retry failure", "retry timeout", "fixed and verified", "tool messages omitted"} {
+	for _, required := range []string{"Diagnose the production retry failure", "fixed and verified"} {
 		if !strings.Contains(projection, required) {
 			t.Fatalf("projection missing %q:\n%s", required, projection)
 		}
+	}
+	if strings.Contains(projection, "routine output") || strings.Contains(projection, "internal/auth/retry.go") {
+		t.Fatalf("projection contains tool output:\n%s", projection)
 	}
 }
 

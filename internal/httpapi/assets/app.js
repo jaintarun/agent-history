@@ -17,7 +17,7 @@ function saveAutoRefreshPreference(enabled) {
 const state = {
   sessions: [], nextCursor: "", selectedID: "", searchAbort: null,
   pollTimer: null, cmuxStatus: null,
-  autoRefresh: loadAutoRefreshPreference(), selectedAnalysisStatus: "",
+  autoRefresh: loadAutoRefreshPreference(), selectedAnalysisStatus: "", conversationExpanded: false,
   settingsProvider: "", settingsProviders: []
 };
 const refreshIntervalSeconds = 60;
@@ -307,6 +307,7 @@ function renderSessions() {
 }
 
 async function selectSession(id, updateURL) {
+  if (state.selectedID !== id) state.conversationExpanded = false;
   state.selectedID = id;
   state.selectedAnalysisStatus = "";
   if (updateURL) setURLFromFilters();
@@ -316,12 +317,10 @@ async function selectSession(id, updateURL) {
   elements["detail-content"].replaceChildren(element("div", "state-line", "Loading session..."));
   clearTimeout(state.pollTimer);
   try {
-    const [session, messageData] = await Promise.all([
-      request("/sessions/" + encodeURIComponent(id)),
-      request("/sessions/" + encodeURIComponent(id) + "/messages?include_tools=true")
-    ]);
+    const session = await request("/sessions/" + encodeURIComponent(id));
     if (state.selectedID !== id) return;
-    renderDetail(session, messageData.messages);
+    await renderDetail(session);
+    if (state.selectedID !== id) return;
     state.selectedAnalysisStatus = session.analysis_status;
     scheduleSelectedSessionPoll();
   } catch (error) {
@@ -330,7 +329,7 @@ async function selectSession(id, updateURL) {
   }
 }
 
-function renderDetail(session, messages) {
+async function renderDetail(session) {
   const content = elements["detail-content"];
   content.replaceChildren();
   const header = element("header", "detail-header");
@@ -361,20 +360,33 @@ function renderDetail(session, messages) {
   else topics.append(element("p", "muted", "No topic chapters yet."));
   content.append(topics);
 
-  const conversation = element("section", "detail-section");
-  const conversationHeading = element("div", "section-heading");
-  conversationHeading.append(element("h2", "", `Visible conversation (${messages.length})`));
-  const toggleLabel = element("label", "check-row");
-  const toggle = document.createElement("input");
-  toggle.type = "checkbox";
-  toggle.checked = true;
-  toggleLabel.append(toggle, document.createTextNode("Show tools"));
-  conversationHeading.append(toggleLabel);
+  const conversation = element("details", "detail-section conversation-section");
+  conversation.open = state.conversationExpanded;
+  const conversationHeading = element("summary", "section-heading", "Conversation");
   const messageList = element("div", "messages");
-  renderMessages(messageList, messages, true);
-  toggle.addEventListener("change", () => renderMessages(messageList, messages, toggle.checked));
+  let loading = null;
+  let loaded = false;
+  const loadConversation = () => {
+    if (loaded || loading) return loading;
+    messageList.replaceChildren(element("div", "state-line", "Loading conversation..."));
+    loading = request("/sessions/" + encodeURIComponent(session.id) + "/messages?include_tools=false")
+      .then((data) => {
+        if (state.selectedID !== session.id) return;
+        renderMessages(messageList, data.messages);
+        conversationHeading.textContent = `Conversation (${data.messages.length})`;
+        loaded = true;
+      })
+      .catch((error) => { messageList.replaceChildren(element("div", "state-line", error.message)); })
+      .finally(() => { loading = null; });
+    return loading;
+  };
+  conversation.addEventListener("toggle", () => {
+    state.conversationExpanded = conversation.open;
+    if (conversation.open) return loadConversation();
+  });
   conversation.append(conversationHeading, messageList);
   content.append(conversation);
+  if (conversation.open) await loadConversation();
 }
 
 function renderCmuxComparison(session) {
@@ -499,10 +511,9 @@ function topicNode(topic, index) {
   return details;
 }
 
-function renderMessages(container, messages, includeTools) {
+function renderMessages(container, messages) {
   container.replaceChildren();
   for (const message of messages) {
-    if (!includeTools && message.role === "tool") continue;
     const row = element("article", "message");
     const role = element("div", "message-role", message.tool_name || message.role);
     role.append(element("div", "", shortDate(message.timestamp)));

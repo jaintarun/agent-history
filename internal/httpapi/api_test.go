@@ -190,7 +190,7 @@ func TestWebApplicationIncludesCoreWorkflows(t *testing.T) {
 	}
 	for _, content := range []string{
 		"Automatically sync titles and descriptions to cmux",
-		"Include full conversations",
+		"Include main conversation",
 		`placeholder="Search summaries and topics"`,
 		`<option value="grok">Grok</option>`,
 	} {

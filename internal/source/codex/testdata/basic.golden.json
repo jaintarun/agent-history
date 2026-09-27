@@ -13,20 +13,6 @@
   },
   {
     "sequence": 2,
-    "timestamp": "2026-07-01T10:02:30Z",
-    "role": "tool",
-    "text": "exec_command {\"cmd\":\"go test ./...\"}",
-    "tool_name": "exec_command"
-  },
-  {
-    "sequence": 3,
-    "timestamp": "2026-07-01T10:03:00Z",
-    "role": "tool",
-    "text": "ok\n",
-    "tool_name": "exec_command"
-  },
-  {
-    "sequence": 4,
     "timestamp": "2026-07-01T10:04:00Z",
     "role": "assistant",
     "text": "The cache key now includes the tenant."

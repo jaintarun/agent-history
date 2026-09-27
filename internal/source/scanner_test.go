@@ -57,8 +57,8 @@ func TestCodexScanIsIdempotentAndInvalidatesOnlyChangedSuffix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(detail.Messages) != 5 {
-		t.Fatalf("stored messages = %d, want 5", len(detail.Messages))
+	if len(detail.Messages) != 3 {
+		t.Fatalf("stored messages = %d, want 3", len(detail.Messages))
 	}
 	assertNoFTSMatch(t, databasePath, "private")
 	assertNoFTSMatch(t, databasePath, "developer")
@@ -73,7 +73,7 @@ func TestCodexScanIsIdempotentAndInvalidatesOnlyChangedSuffix(t *testing.T) {
 
 	node := store.SummaryNode{
 		ID: "sealed-prefix", SessionID: sessionID, Kind: "leaf", Position: 0,
-		StartSequence: 0, EndSequence: 4, InputHash: "prefix-hash",
+		StartSequence: 0, EndSequence: 2, InputHash: "prefix-hash",
 		SummaryJSON: `{"summary":"existing"}`, Sealed: true, Provider: "fake",
 		Model: "test", PromptVersion: "v1", NormalizerVersion: "v1",
 	}
@@ -150,6 +150,82 @@ func TestCodexScanRemovesPreviouslyImportedSubagent(t *testing.T) {
 		t.Fatalf("child session lookup error = %v, want not found", err)
 	}
 	assertNoFTSMatch(t, databasePath, "legacychildword")
+}
+
+func TestConversationNormalizerReimportsLegacyCodexAndClaudeSessions(t *testing.T) {
+	for _, tc := range []struct {
+		agent       string
+		fixture     string
+		destination string
+		nativeID    string
+		adapter     func(string) source.Source
+	}{
+		{agent: "codex", fixture: filepath.Join("codex", "testdata", "basic.jsonl"), destination: filepath.Join("sessions", "basic.jsonl"), nativeID: "11111111-1111-4111-8111-111111111111", adapter: func(home string) source.Source { return codex.New(home) }},
+		{agent: "claude", fixture: filepath.Join("claude", "testdata", "basic.jsonl"), destination: filepath.Join("projects", "project", "basic.jsonl"), nativeID: "55555555-5555-4555-8555-555555555555", adapter: func(home string) source.Source { return claude.New(home) }},
+	} {
+		t.Run(tc.agent, func(t *testing.T) {
+			ctx := context.Background()
+			home := t.TempDir()
+			path := filepath.Join(home, tc.destination)
+			copyFile(t, tc.fixture, path)
+			adapter := tc.adapter(home)
+			info, err := os.Stat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			imported, err := adapter.Read(ctx, source.Candidate{Path: path, Size: info.Size(), ModTime: info.ModTime()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			imported.Session.SourceHash = "legacy-source-hash"
+			imported.Messages = []store.Message{
+				{Sequence: 0, Timestamp: imported.Messages[0].Timestamp, Role: "user", Text: "Visible user request"},
+				{Sequence: 1, Timestamp: imported.Messages[0].Timestamp.Add(time.Second), Role: "tool", Text: "legacytoolword output"},
+				{Sequence: 2, Timestamp: imported.Messages[0].Timestamp.Add(2 * time.Second), Role: "assistant", Text: "Visible assistant reply"},
+			}
+			databasePath := filepath.Join(t.TempDir(), "history.db")
+			database, err := store.Open(ctx, databasePath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = database.Close() })
+			if _, err := database.ImportSession(ctx, imported.Session, imported.Messages); err != nil {
+				t.Fatal(err)
+			}
+			if err := database.ReplaceAnalysis(ctx, imported.Session.ID, store.Analysis{
+				Title: "Old title", Summary: "legacytoolword summary", Provider: "fake", Model: "test",
+				Segments: []store.Segment{{Position: 0, StartSequence: 0, EndSequence: 2, Title: "Old topic", Summary: "legacytoolword topic"}},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			scanner := source.NewScanner(database, adapter)
+			report, err := scanner.Scan(ctx, tc.agent)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if report.Imported != 1 {
+				t.Fatalf("scan report = %#v", report)
+			}
+			detail, err := database.GetSession(ctx, source.StableID(tc.agent, tc.nativeID))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if detail.Session.AnalysisStatus != "none" || detail.Session.Title != "" || detail.Session.Summary != "" || len(detail.Segments) != 0 {
+				t.Fatalf("stale analysis remains: %#v", detail.Session)
+			}
+			for _, message := range detail.Messages {
+				if message.Role == "tool" {
+					t.Fatalf("tool message remains: %#v", message)
+				}
+			}
+			assertNoFTSMatch(t, databasePath, "legacytoolword")
+			if report, err := scanner.Scan(ctx, tc.agent); err != nil {
+				t.Fatal(err)
+			} else if report.Skipped != 1 || report.Imported != 0 {
+				t.Fatalf("repeat scan = %#v", report)
+			}
+		})
+	}
 }
 
 func TestGrokScanRemovesPreviouslyImportedSubagentSessions(t *testing.T) {

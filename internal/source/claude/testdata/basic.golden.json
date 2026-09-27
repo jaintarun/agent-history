@@ -19,20 +19,6 @@
   },
   {
     "sequence": 3,
-    "timestamp": "2026-07-03T10:01:00Z",
-    "role": "tool",
-    "text": "Read {\"file_path\":\"internal/retry.go\"}",
-    "tool_name": "Read"
-  },
-  {
-    "sequence": 4,
-    "timestamp": "2026-07-03T10:02:00Z",
-    "role": "tool",
-    "text": "package retry\n",
-    "tool_name": "Read"
-  },
-  {
-    "sequence": 5,
     "timestamp": "2026-07-03T10:04:00Z",
     "role": "assistant",
     "text": "The idempotency key now covers retries."

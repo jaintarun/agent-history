@@ -916,6 +916,36 @@ func TestConcurrentReaderAndSingleWriter(t *testing.T) {
 	}
 }
 
+func TestSessionOverviewOmitsMessagesUntilRequested(t *testing.T) {
+	ctx := context.Background()
+	database := openTestStore(t)
+	session := testSession("overview")
+	messages := []Message{{Sequence: 0, Timestamp: session.StartedAt, Role: "user", Text: "Build the app"}}
+	if _, err := database.ImportSession(ctx, session, messages); err != nil {
+		t.Fatal(err)
+	}
+	overview, err := database.GetSessionOverview(ctx, session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if overview.Session.ID != session.ID || len(overview.Messages) != 0 {
+		t.Fatalf("overview = %#v", overview)
+	}
+	conversation, err := database.GetSessionMessages(ctx, session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(conversation) != 1 || conversation[0].Text != "Build the app" {
+		t.Fatalf("conversation = %#v", conversation)
+	}
+	if _, err := database.GetSessionOverview(ctx, "missing"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing overview error = %v", err)
+	}
+	if _, err := database.GetSessionMessages(ctx, "missing"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing conversation error = %v", err)
+	}
+}
+
 func openTestStore(t *testing.T) *Store {
 	t.Helper()
 	store, err := Open(context.Background(), filepath.Join(t.TempDir(), "history.db"))

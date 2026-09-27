@@ -3,7 +3,6 @@ package claude
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -18,16 +17,12 @@ import (
 	"sort"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/jaintarun/agent-history/internal/source"
 	"github.com/jaintarun/agent-history/internal/store"
 )
 
-const (
-	maxToolText      = 64 << 10
-	truncationMarker = "\n[tool output truncated]"
-)
+const conversationNormalizerVersion = "claude-conversation-v1"
 
 var errNoMetadata = errors.New("claude: session metadata not found")
 
@@ -94,6 +89,7 @@ func (a *Adapter) Discover(ctx context.Context) ([]source.Candidate, error) {
 		candidate := source.Candidate{
 			Agent: "claude", NativeSessionID: meta.ID, Path: path,
 			Size: info.Size(), ModTime: info.ModTime().UTC(),
+			NormalizerVersion: conversationNormalizerVersion,
 		}
 		current, exists := byID[meta.ID]
 		if !exists || candidate.ModTime.After(current.ModTime) {
@@ -112,8 +108,7 @@ func (a *Adapter) Discover(ctx context.Context) ([]source.Candidate, error) {
 	return candidates, nil
 }
 
-// Read parses a Claude transcript completely and retains only visible main
-// conversation plus bounded tool activity.
+// Read parses a Claude transcript completely and retains only visible main conversation.
 func (a *Adapter) Read(ctx context.Context, candidate source.Candidate) (source.ImportedSession, error) {
 	file, err := os.Open(candidate.Path)
 	if err != nil {
@@ -156,11 +151,11 @@ func (a *Adapter) Read(ctx context.Context, candidate source.Candidate) (source.
 		Session: store.Session{
 			ID: sessionID, Agent: "claude", NativeSessionID: parsed.meta.ID,
 			SourcePath: candidate.Path, SourceSize: candidate.Size,
-			SourceMTime: candidate.ModTime.UTC(), SourceHash: hashString(hasher),
+			SourceMTime: candidate.ModTime.UTC(), SourceHash: conversationNormalizerVersion + ":" + hashString(hasher),
 			WorkingDirectory: parsed.meta.CWD, StartedAt: startedAt.UTC(),
 			LastActiveAt: lastActiveAt.UTC(), AnalysisStatus: "none",
 		},
-		Messages: parsed.messages,
+		Messages: parsed.messages, NormalizerVersion: conversationNormalizerVersion,
 	}, nil
 }
 
@@ -200,19 +195,13 @@ type envelope struct {
 }
 
 type contentBlock struct {
-	Type      string          `json:"type"`
-	Text      string          `json:"text"`
-	ID        string          `json:"id"`
-	Name      string          `json:"name"`
-	Input     json.RawMessage `json:"input"`
-	ToolUseID string          `json:"tool_use_id"`
-	Content   json.RawMessage `json:"content"`
+	Type string `json:"type"`
+	Text string `json:"text"`
 }
 
 func parseTranscript(ctx context.Context, input io.Reader) (parsedTranscript, error) {
 	reader := bufio.NewReader(input)
 	var parsed parsedTranscript
-	toolNames := make(map[string]string)
 	for lineNumber := 1; ; lineNumber++ {
 		line, readErr := source.ReadJSONLRecord(reader)
 		trimmed := strings.TrimSpace(string(line))
@@ -224,7 +213,7 @@ func parseTranscript(ctx context.Context, input io.Reader) (parsedTranscript, er
 				}
 				return parsedTranscript{}, fmt.Errorf("decode line %d: %w", lineNumber, err)
 			}
-			if err := consumeRecord(&parsed, toolNames, record); err != nil {
+			if err := consumeRecord(&parsed, record); err != nil {
 				return parsedTranscript{}, fmt.Errorf("line %d: %w", lineNumber, err)
 			}
 		}
@@ -241,7 +230,7 @@ func parseTranscript(ctx context.Context, input io.Reader) (parsedTranscript, er
 	return parsed, nil
 }
 
-func consumeRecord(parsed *parsedTranscript, toolNames map[string]string, record envelope) error {
+func consumeRecord(parsed *parsedTranscript, record envelope) error {
 	timestamp, err := parseTimestamp(record.Timestamp)
 	if err != nil {
 		return err
@@ -259,19 +248,19 @@ func consumeRecord(parsed *parsedTranscript, toolNames map[string]string, record
 	}
 	switch record.Type {
 	case "user":
-		return consumeUser(parsed, toolNames, timestamp, record.Message.Content)
+		return consumeUser(parsed, timestamp, record.Message.Content)
 	case "assistant":
-		return consumeAssistant(parsed, toolNames, timestamp, record.Message.Content)
+		return consumeAssistant(parsed, timestamp, record.Message.Content)
 	}
 	return nil
 }
 
-func consumeUser(parsed *parsedTranscript, toolNames map[string]string, timestamp time.Time, raw json.RawMessage) error {
+func consumeUser(parsed *parsedTranscript, timestamp time.Time, raw json.RawMessage) error {
 	var text string
 	if json.Unmarshal(raw, &text) == nil {
 		text = visibleUserText(text)
 		if text != "" {
-			appendMessage(parsed, timestamp, "user", text, "")
+			appendMessage(parsed, timestamp, "user", text)
 		}
 		return nil
 	}
@@ -283,33 +272,21 @@ func consumeUser(parsed *parsedTranscript, toolNames map[string]string, timestam
 		switch block.Type {
 		case "text":
 			if text := visibleUserText(block.Text); text != "" {
-				appendMessage(parsed, timestamp, "user", text, "")
-			}
-		case "tool_result":
-			text := contentText(block.Content)
-			if strings.TrimSpace(text) != "" {
-				appendMessage(parsed, timestamp, "tool", boundToolText(text), toolNames[block.ToolUseID])
+				appendMessage(parsed, timestamp, "user", text)
 			}
 		}
 	}
 	return nil
 }
 
-func consumeAssistant(parsed *parsedTranscript, toolNames map[string]string, timestamp time.Time, raw json.RawMessage) error {
+func consumeAssistant(parsed *parsedTranscript, timestamp time.Time, raw json.RawMessage) error {
 	var blocks []contentBlock
 	if err := json.Unmarshal(raw, &blocks); err != nil {
 		return fmt.Errorf("decode assistant content: %w", err)
 	}
 	for _, block := range blocks {
-		switch block.Type {
-		case "text":
-			if strings.TrimSpace(block.Text) != "" {
-				appendMessage(parsed, timestamp, "assistant", block.Text, "")
-			}
-		case "tool_use":
-			toolNames[block.ID] = block.Name
-			text := strings.TrimSpace(block.Name + " " + rawText(block.Input))
-			appendMessage(parsed, timestamp, "tool", boundToolText(text), block.Name)
+		if block.Type == "text" && strings.TrimSpace(block.Text) != "" {
+			appendMessage(parsed, timestamp, "assistant", block.Text)
 		}
 	}
 	return nil
@@ -326,6 +303,7 @@ func visibleUserText(text string) string {
 		}
 	}
 	text = stripTaggedBlock(text, "system-reminder")
+	text = stripTaggedBlock(text, "task-notification")
 	return strings.TrimSpace(text)
 }
 
@@ -345,34 +323,10 @@ func stripTaggedBlock(text, tag string) string {
 	}
 }
 
-func contentText(raw json.RawMessage) string {
-	var text string
-	if json.Unmarshal(raw, &text) == nil {
-		return text
-	}
-	var parts []json.RawMessage
-	if json.Unmarshal(raw, &parts) != nil {
-		return ""
-	}
-	var texts []string
-	for _, part := range parts {
-		var direct string
-		if json.Unmarshal(part, &direct) == nil {
-			texts = append(texts, direct)
-			continue
-		}
-		var block contentBlock
-		if json.Unmarshal(part, &block) == nil && block.Type == "text" && block.Text != "" {
-			texts = append(texts, block.Text)
-		}
-	}
-	return strings.Join(texts, "\n")
-}
-
-func appendMessage(parsed *parsedTranscript, timestamp time.Time, role, text, toolName string) {
+func appendMessage(parsed *parsedTranscript, timestamp time.Time, role, text string) {
 	parsed.messages = append(parsed.messages, store.Message{
 		Sequence: len(parsed.messages), Timestamp: timestamp.UTC(), Role: role,
-		Text: text, ToolName: toolName,
+		Text: text,
 	})
 }
 
@@ -414,32 +368,6 @@ func readMetadata(path string) (metadata, error) {
 func readerAtEOF(reader *bufio.Reader) bool {
 	_, err := reader.Peek(1)
 	return errors.Is(err, io.EOF)
-}
-
-func rawText(raw json.RawMessage) string {
-	if len(raw) == 0 || string(raw) == "null" {
-		return ""
-	}
-	var text string
-	if json.Unmarshal(raw, &text) == nil {
-		return text
-	}
-	var compact bytes.Buffer
-	if err := json.Compact(&compact, raw); err == nil {
-		return compact.String()
-	}
-	return string(raw)
-}
-
-func boundToolText(text string) string {
-	if len(text) <= maxToolText {
-		return text
-	}
-	end := maxToolText
-	for end > 0 && !utf8.RuneStart(text[end]) {
-		end--
-	}
-	return text[:end] + truncationMarker
 }
 
 func parseTimestamp(value string) (time.Time, error) {

@@ -212,6 +212,27 @@ func TestEnqueuePendingAnalysesQueuesEachCandidate(t *testing.T) {
 	}
 }
 
+func TestEnqueuePendingAnalysesStopsAtFullQueue(t *testing.T) {
+	database := &fakePendingStore{ids: []string{"first", "second", "third"}}
+	queue := &fullAnalysisQueue{}
+	queued, err := enqueuePendingAnalyses(context.Background(), database, queue, func(context.Context) (analyze.Options, error) {
+		return analyze.Options{Provider: "codex-cli", Model: "test"}, nil
+	}, false)
+	if err != nil || queued != 1 || strings.Join(queue.ids, ",") != "first,second" {
+		t.Fatalf("queued=%d ids=%v err=%v", queued, queue.ids, err)
+	}
+}
+
+type fullAnalysisQueue struct{ ids []string }
+
+func (q *fullAnalysisQueue) Enqueue(_ context.Context, id string, _ analyze.Options) (<-chan error, error) {
+	q.ids = append(q.ids, id)
+	if len(q.ids) > 1 {
+		return nil, analyze.ErrQueueFull
+	}
+	return make(chan error, 1), nil
+}
+
 func TestEnqueuePendingAnalysesLoadsCurrentOptionsForEachBatch(t *testing.T) {
 	database := &fakePendingStore{ids: []string{"session-1"}}
 	queue := &fakeAnalysisQueue{}

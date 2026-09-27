@@ -108,8 +108,8 @@ func (s *Store) ReplaceMessages(ctx context.Context, sessionID string, messages 
 	return nil
 }
 
-// GetSession returns source metadata, normalized messages, and visible topics.
-func (s *Store) GetSession(ctx context.Context, id string) (SessionDetail, error) {
+// GetSessionOverview returns metadata and topics without reading transcript messages.
+func (s *Store) GetSessionOverview(ctx context.Context, id string) (SessionDetail, error) {
 	session, err := scanSession(s.db.QueryRowContext(ctx, sessionSelect+` WHERE id = ?`, id))
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -117,15 +117,33 @@ func (s *Store) GetSession(ctx context.Context, id string) (SessionDetail, error
 		}
 		return SessionDetail{}, fmt.Errorf("get session: %w", err)
 	}
-	messages, err := s.messages(ctx, id)
-	if err != nil {
-		return SessionDetail{}, err
-	}
 	segments, err := s.segments(ctx, id)
 	if err != nil {
 		return SessionDetail{}, err
 	}
-	return SessionDetail{Session: session, Messages: messages, Segments: segments}, nil
+	return SessionDetail{Session: session, Segments: segments}, nil
+}
+
+// GetSessionMessages reads conversation text only when it is requested.
+func (s *Store) GetSessionMessages(ctx context.Context, id string) ([]Message, error) {
+	var exists int
+	if err := s.db.QueryRowContext(ctx, `SELECT 1 FROM sessions WHERE id = ?`, id).Scan(&exists); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("check session: %w", err)
+	}
+	return s.messages(ctx, id)
+}
+
+// GetSession returns source metadata, normalized messages, and visible topics.
+func (s *Store) GetSession(ctx context.Context, id string) (SessionDetail, error) {
+	detail, err := s.GetSessionOverview(ctx, id)
+	if err != nil {
+		return SessionDetail{}, err
+	}
+	detail.Messages, err = s.messages(ctx, id)
+	return detail, err
 }
 
 // DeleteSession removes a session and all derived records.

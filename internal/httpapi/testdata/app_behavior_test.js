@@ -336,14 +336,12 @@ async function testStaleSelections() {
   assert.equal(evaluate(environment, "state.selectedAnalysisStatus"), "", "a new selection must clear the prior status");
   const selectingB = evaluate(environment, 'selectSession("B", false)');
   pending.get("/sessions/B").resolve(session("B", "queued"));
-  pending.get("/sessions/B/messages?include_tools=true").resolve({ messages: [] });
   await selectingB;
   assert.match(textOf(environment.nodes["detail-content"]), /Session B/);
   assert.equal(evaluate(environment, "state.selectedAnalysisStatus"), "queued");
   assert.equal(pollTimers(environment).length, 1);
 
   pending.get("/sessions/A").resolve(session("A", "current"));
-  pending.get("/sessions/A/messages?include_tools=true").resolve({ messages: [] });
   await selectingA;
   assert.match(textOf(environment.nodes["detail-content"]), /Session B/, "stale success replaced selected detail");
   assert.equal(evaluate(environment, "state.selectedAnalysisStatus"), "queued", "stale success replaced selected status");
@@ -353,14 +351,40 @@ async function testStaleSelections() {
   const selectingFailed = evaluate(environment, 'selectSession("failed", false)');
   const selectingRunning = evaluate(environment, 'selectSession("running", false)');
   pending.get("/sessions/running").resolve(session("running", "running"));
-  pending.get("/sessions/running/messages?include_tools=true").resolve({ messages: [] });
   await selectingRunning;
   pending.get("/sessions/failed").reject(new Error("stale failure"));
-  pending.get("/sessions/failed/messages?include_tools=true").resolve({ messages: [] });
   await selectingFailed;
   assert.match(textOf(environment.nodes["detail-content"]), /Session running/, "stale failure replaced selected detail");
   assert.equal(evaluate(environment, "state.selectedAnalysisStatus"), "running", "stale failure replaced selected status");
   assert.equal(pollTimers(environment).length, 1, "stale failure canceled selected polling");
+}
+
+async function testConversationLoadsOnlyWhenOpened() {
+  const environment = createEnvironment("off");
+  for (let index = 0; index < 4; index += 1) await settle();
+  environment.requests.length = 0;
+  environment.fetchHandler = (url) => {
+    const path = String(url).replace("/test-token/api", "");
+    if (path === "/sessions/A") return Promise.resolve(fakeResponse(session("A", "current")));
+    if (path === "/sessions/A/messages?include_tools=false") {
+      return Promise.resolve(fakeResponse({ messages: [{ role: "user", text: "Build the app", timestamp: "2026-08-02T10:00:00Z" }] }));
+    }
+    throw new Error(`unexpected fetch ${path}`);
+  };
+  await evaluate(environment, 'selectSession("A", false)');
+  assert.equal(environment.requests.filter((request) => request.url.includes("/messages")).length, 0);
+  const conversation = descendant(environment.nodes["detail-content"], (node) => node.tagName === "DETAILS" && textOf(node).includes("Conversation"));
+  assert.ok(conversation, "conversation details should exist");
+  assert.equal(conversation.open, false);
+  conversation.open = true;
+  await Promise.all((conversation.listeners.get("toggle") || []).map((listener) => listener()));
+  await settle();
+  assert.equal(environment.requests.filter((request) => request.url.endsWith("/messages?include_tools=false")).length, 1, JSON.stringify(environment.requests.map((request) => request.url)));
+  assert.match(textOf(conversation), /Build the app/);
+  await evaluate(environment, 'selectSession("A", false)');
+  assert.equal(environment.requests.filter((request) => request.url.endsWith("/messages?include_tools=false")).length, 2);
+  const refreshed = descendant(environment.nodes["detail-content"], (node) => node.tagName === "DETAILS" && textOf(node).includes("Conversation"));
+  assert.equal(refreshed.open, true, "refresh should preserve expanded conversation");
 }
 
 async function testResumePermissionActions() {
@@ -556,6 +580,7 @@ async function main() {
   await testDisableAndReenable();
   await testDisabledManualRefreshAndPollSuppression();
   await testStaleSelections();
+  await testConversationLoadsOnlyWhenOpened();
   await testResumePermissionActions();
   await testSearchScopeControl();
   await testAnalysisProviderSettings();

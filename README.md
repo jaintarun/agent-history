@@ -8,7 +8,7 @@ self-contained SQLite-backed web app.
 ## Highlights
 
 - **Find old work quickly.** Search titles, hierarchical summaries, topics, or
-  full conversations with AND matching. Narrow results by agent, working
+  main conversations with AND matching. Narrow results by agent, working
   folder, activity or start date, single- or multi-topic session, analysis
   state, and whether the session is open in cmux.
 - **Keep history current automatically.** The background service finds new and
@@ -115,8 +115,8 @@ model in **Settings**, then use **Scan** or wait for the background scanner.
   sessions marked as subagents and rewound conversation branches are excluded.
 - Removes private reasoning, thinking blocks, system/developer instructions,
   injected instruction envelopes, and transport metadata before persistence.
-- Stores visible user/assistant text in SQLite. Grok imports conversation only;
-  Codex and Claude retain bounded tool facts.
+- Stores visible user/assistant conversation in SQLite for all three sources;
+  tool calls, results, and private reasoning are not stored or indexed.
 - Generates a session title, overview, chronological topic summaries, and
   detailed topic evidence.
 - Reuses sealed summaries when a multi-day session grows, analyzing only new
@@ -128,9 +128,10 @@ model in **Settings**, then use **Scan** or wait for the background scanner.
 - Reanalyzes, retitles, deletes replaceable analysis, rescans, and resumes the
   original agent session.
 
-Search terms use AND semantics. Enable **Include full conversations** to search
-every retained normalized message; otherwise analyzed transcript text is not
-searched, which keeps results focused.
+Search terms use AND semantics. Enable **Include main conversation** to search
+retained user/assistant messages; otherwise analyzed transcript text is not
+searched, which keeps results focused. The conversation is loaded only when its
+collapsed section is opened.
 
 ## Analysis Providers
 
@@ -143,10 +144,11 @@ Grok is deliberately absent from this table: it is a transcript source and
 resume target only. Grok sessions are summarized with whichever Codex or Claude
 Code analyzer is selected in **Settings**.
 
-After upgrading from a tool-inclusive Grok import, the next scan removes old
-tool messages and their search entries. Affected summaries and titles are
-cleared and rebuilt by background analysis when it is enabled; otherwise use
-**Reanalyze** for those sessions.
+After upgrading from an older tool-inclusive Codex or Claude import, the next
+scan removes old tool messages and their search entries. Affected summaries and
+titles are cleared and rebuilt gradually by background analysis when enabled;
+otherwise use **Reanalyze** for those sessions. A `VACUUM` after the migration
+releases the removed SQLite pages to the filesystem.
 
 Provider executables are detected when the service starts. Install a missing
 CLI, authenticate it, then rerun `./install-startup.sh`. Agent History does not
