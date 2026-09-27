@@ -90,6 +90,8 @@ no source-parser behavior exists yet.
 
 - Discover `CODEX_HOME` or `~/.codex`.
 - Scan active and archived session directories for rollout JSONL files.
+- Exclude spawned and review subagent rollouts using session metadata, and
+  remove previously imported child sessions on the next scan.
 - Parse the native session ID, cwd, timestamps, and visible events.
 - Classify Codex records into visible user, visible assistant, tool, reasoning,
   system, or metadata categories.

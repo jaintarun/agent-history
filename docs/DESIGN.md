@@ -209,7 +209,8 @@ type Source interface {
 The first adapters are:
 
 - `codex`: active and archived rollout JSONL records under `CODEX_HOME` or
-  `~/.codex`.
+  `~/.codex`. Session metadata marked as a spawned or review subagent is
+  excluded; a later scan removes previously imported child sessions.
 - `claude`: project JSONL records under `CLAUDE_CONFIG_DIR` or `~/.claude`.
 - `grok`: main ACP update streams under `GROK_HOME` or `~/.grok/sessions`.
   Grok stores child histories beside main sessions, so streams whose metadata

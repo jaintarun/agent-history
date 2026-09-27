@@ -114,6 +114,44 @@ func TestCodexScanIsIdempotentAndInvalidatesOnlyChangedSuffix(t *testing.T) {
 	}
 }
 
+func TestCodexScanRemovesPreviouslyImportedSubagent(t *testing.T) {
+	ctx := context.Background()
+	home := t.TempDir()
+	path := filepath.Join(home, "sessions", "child.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	write := func(sourceValue string) {
+		t.Helper()
+		content := `{"timestamp":"2026-07-01T10:00:00Z","type":"session_meta","payload":{"id":"child","cwd":"/tmp/project","source":` + sourceValue + `}}` + "\n" +
+			`{"timestamp":"2026-07-01T10:01:00Z","type":"event_msg","payload":{"type":"user_message","message":"legacychildword"}}` + "\n"
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(`"cli"`)
+	databasePath := filepath.Join(t.TempDir(), "history.db")
+	database, err := store.Open(ctx, databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	scanner := source.NewScanner(database, codex.New(home))
+	if report, err := scanner.Scan(ctx, "codex"); err != nil {
+		t.Fatal(err)
+	} else if report.Imported != 1 {
+		t.Fatalf("initial report = %#v", report)
+	}
+	write(`{"subagent":"review"}`)
+	if _, err := scanner.Scan(ctx, "codex"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.GetSession(ctx, source.StableID("codex", "child")); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("child session lookup error = %v, want not found", err)
+	}
+	assertNoFTSMatch(t, databasePath, "legacychildword")
+}
+
 func TestGrokScanRemovesPreviouslyImportedSubagentSessions(t *testing.T) {
 	ctx := context.Background()
 	home := t.TempDir()

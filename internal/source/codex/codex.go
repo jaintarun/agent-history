@@ -100,6 +100,7 @@ func (a *Adapter) Discover(ctx context.Context) ([]source.Candidate, error) {
 			candidate := source.Candidate{
 				Agent: "codex", NativeSessionID: meta.ID, Path: path,
 				Size: info.Size(), ModTime: info.ModTime().UTC(), Archived: root.archived,
+				Excluded: meta.IsSubagent,
 			}
 			current, exists := byID[meta.ID]
 			if !exists || (current.Archived && !candidate.Archived) ||
@@ -184,9 +185,10 @@ func (a *Adapter) ResumeSpec(session store.Session) (source.ResumeSpec, error) {
 }
 
 type metadata struct {
-	ID        string
-	CWD       string
-	Timestamp time.Time
+	ID         string
+	CWD        string
+	Timestamp  time.Time
+	IsSubagent bool
 }
 
 type parsedRollout struct {
@@ -250,9 +252,10 @@ func consumeRecord(parsed *parsedRollout, toolNames map[string]string, record en
 			return nil
 		}
 		var payload struct {
-			ID        string `json:"id"`
-			CWD       string `json:"cwd"`
-			Timestamp string `json:"timestamp"`
+			ID        string          `json:"id"`
+			CWD       string          `json:"cwd"`
+			Timestamp string          `json:"timestamp"`
+			Source    json.RawMessage `json:"source"`
 		}
 		if err := json.Unmarshal(record.Payload, &payload); err != nil {
 			return err
@@ -264,7 +267,15 @@ func consumeRecord(parsed *parsedRollout, toolNames map[string]string, record en
 				return err
 			}
 		}
-		parsed.meta = metadata{ID: payload.ID, CWD: payload.CWD, Timestamp: metaTimestamp}
+		isSubagent := false
+		if len(payload.Source) > 0 && payload.Source[0] == '{' {
+			var sourceFields map[string]json.RawMessage
+			if err := json.Unmarshal(payload.Source, &sourceFields); err != nil {
+				return err
+			}
+			_, isSubagent = sourceFields["subagent"]
+		}
+		parsed.meta = metadata{ID: payload.ID, CWD: payload.CWD, Timestamp: metaTimestamp, IsSubagent: isSubagent}
 	case "event_msg":
 		var payload struct {
 			Type    string `json:"type"`

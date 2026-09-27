@@ -107,7 +107,8 @@ model in **Settings**, then use **Scan** or wait for the background scanner.
 
 ## What It Does
 
-- Discovers Codex rollouts under `CODEX_HOME` or `~/.codex`.
+- Discovers Codex rollouts under `CODEX_HOME` or `~/.codex`; spawned and
+  review subagent sessions are excluded and removed from older indexes.
 - Discovers Claude Code project transcripts under `CLAUDE_CONFIG_DIR` or
   `~/.claude/projects`; nested subagent transcripts are excluded.
 - Discovers Grok Build session updates under `GROK_HOME` or `~/.grok/sessions`;

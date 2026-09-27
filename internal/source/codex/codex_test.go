@@ -107,6 +107,43 @@ func TestDiscoverDeduplicatesAndPrefersActiveSession(t *testing.T) {
 	}
 }
 
+func TestDiscoverExcludesSubagentSessions(t *testing.T) {
+	home := t.TempDir()
+	cases := []struct {
+		name   string
+		source string
+		want   bool
+	}{
+		{name: "interactive", source: `"cli"`},
+		{name: "spawned", source: `{"subagent":{"thread_spawn":{"parent_thread_id":"parent","depth":1}}}`, want: true},
+		{name: "review", source: `{"subagent":"review"}`, want: true},
+	}
+	for _, tc := range cases {
+		path := filepath.Join(home, "sessions", tc.name+".jsonl")
+		content := `{"timestamp":"2026-07-01T10:00:00Z","type":"session_meta","payload":{"id":"` + tc.name + `","cwd":"/tmp/project","source":` + tc.source + `}}` + "\n"
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	candidates, err := New(home).Discover(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != len(cases) {
+		t.Fatalf("candidate count = %d, want %d", len(candidates), len(cases))
+	}
+	for _, candidate := range candidates {
+		for _, tc := range cases {
+			if candidate.NativeSessionID == tc.name && candidate.Excluded != tc.want {
+				t.Errorf("%s excluded = %t, want %t", tc.name, candidate.Excluded, tc.want)
+			}
+		}
+	}
+}
+
 func TestReadBoundsToolOutput(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "large.jsonl")
 	large := strings.Repeat("x", maxToolText+100)
