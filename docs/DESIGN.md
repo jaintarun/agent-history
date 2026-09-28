@@ -146,8 +146,8 @@ The main screen is a dense search/detail split view:
 ```
 
 Search and filters update the result list. Selecting a topic shows its detailed
-summary and referenced messages. The main conversation is collapsed by default
-and loaded only when opened.
+summary and referenced messages. The main conversation is visible in the session
+detail and loads when the session is selected.
 
 ### Session actions
 

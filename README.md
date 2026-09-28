@@ -131,7 +131,7 @@ model in **Settings**, then use **Scan** or wait for the background scanner.
 Search terms use AND semantics. Enable **Include main conversation** to search
 retained user/assistant messages; otherwise analyzed transcript text is not
 searched, which keeps results focused. The conversation is loaded only when its
-collapsed section is opened.
+session is selected, and appears below the topic summaries.
 
 ## Analysis Providers
 

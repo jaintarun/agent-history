@@ -17,7 +17,7 @@ function saveAutoRefreshPreference(enabled) {
 const state = {
   sessions: [], nextCursor: "", selectedID: "", searchAbort: null,
   pollTimer: null, cmuxStatus: null,
-  autoRefresh: loadAutoRefreshPreference(), selectedAnalysisStatus: "", conversationExpanded: false,
+  autoRefresh: loadAutoRefreshPreference(), selectedAnalysisStatus: "", detailRevision: 0,
   settingsProvider: "", settingsProviders: []
 };
 const refreshIntervalSeconds = 60;
@@ -307,7 +307,7 @@ function renderSessions() {
 }
 
 async function selectSession(id, updateURL) {
-  if (state.selectedID !== id) state.conversationExpanded = false;
+  const revision = ++state.detailRevision;
   state.selectedID = id;
   state.selectedAnalysisStatus = "";
   if (updateURL) setURLFromFilters();
@@ -318,18 +318,17 @@ async function selectSession(id, updateURL) {
   clearTimeout(state.pollTimer);
   try {
     const session = await request("/sessions/" + encodeURIComponent(id));
-    if (state.selectedID !== id) return;
-    await renderDetail(session);
-    if (state.selectedID !== id) return;
+    if (state.detailRevision !== revision) return;
+    renderDetail(session, revision);
     state.selectedAnalysisStatus = session.analysis_status;
     scheduleSelectedSessionPoll();
   } catch (error) {
-    if (state.selectedID !== id) return;
+    if (state.detailRevision !== revision) return;
     elements["detail-content"].replaceChildren(element("div", "state-line", error.message));
   }
 }
 
-async function renderDetail(session) {
+function renderDetail(session, revision) {
   const content = elements["detail-content"];
   content.replaceChildren();
   const header = element("header", "detail-header");
@@ -360,33 +359,22 @@ async function renderDetail(session) {
   else topics.append(element("p", "muted", "No topic chapters yet."));
   content.append(topics);
 
-  const conversation = element("details", "detail-section conversation-section");
-  conversation.open = state.conversationExpanded;
-  const conversationHeading = element("summary", "section-heading", "Conversation");
+  const conversation = element("section", "detail-section conversation-section");
+  const conversationHeading = element("h2", "section-heading", "Conversation");
   const messageList = element("div", "messages");
-  let loading = null;
-  let loaded = false;
-  const loadConversation = () => {
-    if (loaded || loading) return loading;
-    messageList.replaceChildren(element("div", "state-line", "Loading conversation..."));
-    loading = request("/sessions/" + encodeURIComponent(session.id) + "/messages?include_tools=false")
-      .then((data) => {
-        if (state.selectedID !== session.id) return;
-        renderMessages(messageList, data.messages);
-        conversationHeading.textContent = `Conversation (${data.messages.length})`;
-        loaded = true;
-      })
-      .catch((error) => { messageList.replaceChildren(element("div", "state-line", error.message)); })
-      .finally(() => { loading = null; });
-    return loading;
-  };
-  conversation.addEventListener("toggle", () => {
-    state.conversationExpanded = conversation.open;
-    if (conversation.open) return loadConversation();
-  });
+  messageList.replaceChildren(element("div", "state-line", "Loading conversation..."));
   conversation.append(conversationHeading, messageList);
   content.append(conversation);
-  if (conversation.open) await loadConversation();
+  request("/sessions/" + encodeURIComponent(session.id) + "/messages?include_tools=false")
+    .then((data) => {
+      if (state.detailRevision !== revision) return;
+      renderMessages(messageList, data.messages);
+      if (!data.messages.length) messageList.replaceChildren(element("p", "muted", "No visible conversation."));
+      conversationHeading.textContent = `Conversation (${data.messages.length})`;
+    })
+    .catch((error) => {
+      if (state.detailRevision === revision) messageList.replaceChildren(element("div", "state-line", error.message));
+    });
 }
 
 function renderCmuxComparison(session) {

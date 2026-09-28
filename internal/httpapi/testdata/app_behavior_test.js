@@ -322,7 +322,7 @@ async function testDisabledManualRefreshAndPollSuppression() {
 
 async function testStaleSelections() {
   const environment = createEnvironment();
-  await settle();
+  for (let index = 0; index < 4; index += 1) await settle();
   const pending = new Map();
   environment.fetchHandler = (url) => {
     const path = String(url).replace("/test-token/api", "");
@@ -359,7 +359,7 @@ async function testStaleSelections() {
   assert.equal(pollTimers(environment).length, 1, "stale failure canceled selected polling");
 }
 
-async function testConversationLoadsOnlyWhenOpened() {
+async function testConversationLoadsOnSelection() {
   const environment = createEnvironment("off");
   for (let index = 0; index < 4; index += 1) await settle();
   environment.requests.length = 0;
@@ -372,19 +372,68 @@ async function testConversationLoadsOnlyWhenOpened() {
     throw new Error(`unexpected fetch ${path}`);
   };
   await evaluate(environment, 'selectSession("A", false)');
-  assert.equal(environment.requests.filter((request) => request.url.includes("/messages")).length, 0);
-  const conversation = descendant(environment.nodes["detail-content"], (node) => node.tagName === "DETAILS" && textOf(node).includes("Conversation"));
-  assert.ok(conversation, "conversation details should exist");
-  assert.equal(conversation.open, false);
-  conversation.open = true;
-  await Promise.all((conversation.listeners.get("toggle") || []).map((listener) => listener()));
   await settle();
   assert.equal(environment.requests.filter((request) => request.url.endsWith("/messages?include_tools=false")).length, 1, JSON.stringify(environment.requests.map((request) => request.url)));
+  const conversation = descendant(environment.nodes["detail-content"], (node) => node.className?.includes("conversation-section"));
+  assert.ok(conversation, "conversation section should exist");
+  assert.notEqual(conversation.tagName, "DETAILS", "conversation should not be hidden behind a disclosure");
   assert.match(textOf(conversation), /Build the app/);
   await evaluate(environment, 'selectSession("A", false)');
+  await settle();
   assert.equal(environment.requests.filter((request) => request.url.endsWith("/messages?include_tools=false")).length, 2);
-  const refreshed = descendant(environment.nodes["detail-content"], (node) => node.tagName === "DETAILS" && textOf(node).includes("Conversation"));
-  assert.equal(refreshed.open, true, "refresh should preserve expanded conversation");
+  const refreshed = descendant(environment.nodes["detail-content"], (node) => node.className?.includes("conversation-section"));
+  assert.match(textOf(refreshed), /Build the app/, "refresh should keep conversation visible");
+}
+
+async function testConversationEmptyAndStaleRefresh() {
+  const environment = createEnvironment("off");
+  for (let index = 0; index < 4; index += 1) await settle();
+  const messageRequests = [];
+  environment.fetchHandler = (url) => {
+    const path = String(url).replace("/test-token/api", "");
+    if (path === "/sessions/A") return Promise.resolve(fakeResponse(session("A", "current")));
+    if (path === "/sessions/A/messages?include_tools=false") {
+      const pending = deferredResponse();
+      messageRequests.push(pending);
+      return pending.promise;
+    }
+    throw new Error(`unexpected fetch ${path}`);
+  };
+  await evaluate(environment, 'selectSession("A", false)');
+  await evaluate(environment, 'selectSession("A", false)');
+  assert.equal(messageRequests.length, 2);
+  messageRequests[1].resolve({ messages: [] });
+  await settle();
+  const content = environment.nodes["detail-content"];
+  assert.match(textOf(content), /No visible conversation/);
+  messageRequests[0].resolve({ messages: [{ role: "user", text: "Stale text", timestamp: "2026-08-02T10:00:00Z" }] });
+  await settle();
+  assert.doesNotMatch(textOf(content), /Stale text/);
+}
+
+async function testStaleSameSessionOverview() {
+  const environment = createEnvironment("off");
+  for (let index = 0; index < 4; index += 1) await settle();
+  const detailRequests = [];
+  environment.fetchHandler = (url) => {
+    const path = String(url).replace("/test-token/api", "");
+    if (path === "/sessions/A") {
+      const pending = deferredResponse();
+      detailRequests.push(pending);
+      return pending.promise;
+    }
+    if (path === "/sessions/A/messages?include_tools=false") return Promise.resolve(fakeResponse({ messages: [] }));
+    throw new Error(`unexpected fetch ${path}`);
+  };
+  const oldRequest = evaluate(environment, 'selectSession("A", false)');
+  const newRequest = evaluate(environment, 'selectSession("A", false)');
+  assert.equal(detailRequests.length, 2);
+  detailRequests[1].resolve({ ...session("A", "current"), summary: "New summary" });
+  await newRequest;
+  detailRequests[0].resolve({ ...session("A", "current"), summary: "Old summary" });
+  await oldRequest;
+  assert.match(textOf(environment.nodes["detail-content"]), /New summary/);
+  assert.doesNotMatch(textOf(environment.nodes["detail-content"]), /Old summary/);
 }
 
 async function testResumePermissionActions() {
@@ -580,7 +629,9 @@ async function main() {
   await testDisableAndReenable();
   await testDisabledManualRefreshAndPollSuppression();
   await testStaleSelections();
-  await testConversationLoadsOnlyWhenOpened();
+  await testConversationLoadsOnSelection();
+  await testConversationEmptyAndStaleRefresh();
+  await testStaleSameSessionOverview();
   await testResumePermissionActions();
   await testSearchScopeControl();
   await testAnalysisProviderSettings();
