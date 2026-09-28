@@ -147,7 +147,8 @@ The main screen is a dense search/detail split view:
 
 Search and filters update the result list. Selecting a topic shows its detailed
 summary and referenced messages. The main conversation is visible in the session
-detail and loads when the session is selected.
+detail and loads when the session is selected. The API renders sanitized Markdown
+for display without persisting rendered HTML or changing search text.
 
 ### Session actions
 

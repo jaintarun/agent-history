@@ -130,8 +130,9 @@ model in **Settings**, then use **Scan** or wait for the background scanner.
 
 Search terms use AND semantics. Enable **Include main conversation** to search
 retained user/assistant messages; otherwise analyzed transcript text is not
-searched, which keeps results focused. The conversation is loaded only when its
-session is selected, and appears below the topic summaries.
+searched, which keeps results focused. Selecting a session loads its conversation
+below the topic summaries. Markdown is rendered safely for display; SQLite keeps
+only the original normalized text.
 
 ## Analysis Providers
 

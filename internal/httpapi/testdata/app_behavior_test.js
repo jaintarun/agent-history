@@ -385,6 +385,24 @@ async function testConversationLoadsOnSelection() {
   assert.match(textOf(refreshed), /Build the app/, "refresh should keep conversation visible");
 }
 
+async function testConversationRendersMarkdownHTML() {
+  const environment = createEnvironment("off");
+  for (let index = 0; index < 4; index += 1) await settle();
+  environment.fetchHandler = (url) => {
+    const path = String(url).replace("/test-token/api", "");
+    if (path === "/sessions/A") return Promise.resolve(fakeResponse(session("A", "current")));
+    if (path === "/sessions/A/messages?include_tools=false") {
+      return Promise.resolve(fakeResponse({ messages: [{ role: "assistant", text: "**Done**", html: "<p><strong>Done</strong></p>", timestamp: "2026-08-02T10:00:00Z" }] }));
+    }
+    throw new Error(`unexpected fetch ${path}`);
+  };
+  await evaluate(environment, 'selectSession("A", false)');
+  await settle();
+  const body = descendant(environment.nodes["detail-content"], (node) => node.className === "message-text");
+  assert.equal(body.tagName, "DIV");
+  assert.equal(body.innerHTML, "<p><strong>Done</strong></p>");
+}
+
 async function testConversationEmptyAndStaleRefresh() {
   const environment = createEnvironment("off");
   for (let index = 0; index < 4; index += 1) await settle();
@@ -630,6 +648,7 @@ async function main() {
   await testDisabledManualRefreshAndPollSuppression();
   await testStaleSelections();
   await testConversationLoadsOnSelection();
+  await testConversationRendersMarkdownHTML();
   await testConversationEmptyAndStaleRefresh();
   await testStaleSameSessionOverview();
   await testResumePermissionActions();

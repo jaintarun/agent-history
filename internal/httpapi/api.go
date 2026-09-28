@@ -326,9 +326,14 @@ func (h *handler) messages(response http.ResponseWriter, request *http.Request) 
 		if message.Role == "tool" && !includeTools {
 			continue
 		}
+		html, err := renderMarkdown(message.Text)
+		if err != nil {
+			writeError(response, http.StatusInternalServerError, "render_error", "could not render conversation")
+			return
+		}
 		result = append(result, messageResponse{
 			Sequence: message.Sequence, Timestamp: formatAPITime(message.Timestamp),
-			Role: message.Role, Text: message.Text, ToolName: message.ToolName,
+			Role: message.Role, Text: message.Text, HTML: html, ToolName: message.ToolName,
 		})
 	}
 	writeJSON(response, http.StatusOK, map[string]any{"messages": result})
@@ -802,6 +807,7 @@ type messageResponse struct {
 	Timestamp string `json:"timestamp"`
 	Role      string `json:"role"`
 	Text      string `json:"text"`
+	HTML      string `json:"html"`
 	ToolName  string `json:"tool_name,omitempty"`
 }
 

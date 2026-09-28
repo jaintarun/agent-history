@@ -347,7 +347,7 @@ Every frontend workflow can be completed with HTTP requests alone.
   - cursor-based result loading;
   - selected-session metadata;
   - topic timeline and detailed summaries;
-  - a visible conversation view loaded when a session is selected;
+  - a visible conversation view loaded when a session is selected, with sanitized Markdown rendering;
   - analysis state and errors;
   - analyzed-through status for sessions with new unsealed conversation;
   - Analyze, Reanalyze, Retitle, bulk weak-title retitling, Delete analysis,

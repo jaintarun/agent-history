@@ -163,7 +163,20 @@ button.has-action-help { display: inline-flex; align-items: center; justify-cont
 .messages { display: grid; gap: 0; border-top: 1px solid var(--line); }
 .message { padding: 10px 4px; display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 12px; border-bottom: 1px solid #e5e7e1; }
 .message-role { color: var(--text-muted); font-size: 11px; text-transform: uppercase; }
-.message-text { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.message-text { min-width: 0; overflow-wrap: anywhere; line-height: 1.55; }
+.message-text > :first-child { margin-top: 0; }
+.message-text > :last-child { margin-bottom: 0; }
+.message-text p, .message-text ul, .message-text ol, .message-text blockquote, .message-text pre, .message-text table { margin: 0 0 10px; }
+.message-text ul, .message-text ol { padding-left: 22px; }
+.message-text h1, .message-text h2, .message-text h3, .message-text h4, .message-text h5, .message-text h6 { margin: 12px 0 6px; font-size: 14px; line-height: 1.35; }
+.message-text h1 { font-size: 16px; }
+.message-text blockquote { padding-left: 11px; border-left: 3px solid var(--line-strong); color: var(--text-muted); }
+.message-text pre { max-width: 100%; padding: 9px 10px; overflow-x: auto; background: var(--surface-muted); border: 1px solid var(--line); border-radius: 4px; }
+.message-text code { font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.message-text :not(pre) > code { padding: 1px 3px; background: var(--surface-muted); border-radius: 2px; }
+.message-text table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; }
+.message-text th, .message-text td { padding: 5px 8px; border: 1px solid var(--line); text-align: left; }
+.message-text a { color: var(--focus); }
 
 dialog { width: min(480px, calc(100vw - 28px)); padding: 0; border: 1px solid var(--line-strong); border-radius: 6px; color: inherit; background: var(--surface); box-shadow: 0 18px 50px rgba(20, 24, 19, .24); }
 dialog::backdrop { background: rgba(31, 35, 30, .42); }

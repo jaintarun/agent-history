@@ -505,7 +505,10 @@ function renderMessages(container, messages) {
     const row = element("article", "message");
     const role = element("div", "message-role", message.tool_name || message.role);
     role.append(element("div", "", shortDate(message.timestamp)));
-    row.append(role, element("pre", "message-text", message.text));
+    const body = element("div", "message-text");
+    if (message.html) body.innerHTML = message.html;
+    else body.textContent = message.text;
+    row.append(role, body);
     container.append(row);
   }
 }

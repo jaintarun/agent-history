@@ -804,6 +804,31 @@ func TestAccessLogsDoNotContainTranscriptText(t *testing.T) {
 	}
 }
 
+func TestMessagesIncludeRenderedMarkdownWithoutChangingStoredText(t *testing.T) {
+	handler, database, _, _, _, _ := testHandler(t)
+	content := "**Fixed** [details](https://example.com) <script>alert(1)</script>"
+	if err := database.ReplaceMessages(context.Background(), "session-1", []store.Message{{Sequence: 0, Timestamp: time.Now().UTC(), Role: "assistant", Text: content}}); err != nil {
+		t.Fatal(err)
+	}
+	response := serve(handler, apiRequest(http.MethodGet, "/test-token/api/sessions/session-1/messages", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("messages status = %d: %s", response.Code, response.Body.String())
+	}
+	var result struct {
+		Messages []struct {
+			Text string `json:"text"`
+			HTML string `json:"html"`
+		} `json:"messages"`
+	}
+	decodeResponse(t, response, &result)
+	if len(result.Messages) != 1 || result.Messages[0].Text != content {
+		t.Fatalf("original message text changed: %#v", result.Messages)
+	}
+	if !strings.Contains(result.Messages[0].HTML, "<strong>Fixed</strong>") || strings.Contains(result.Messages[0].HTML, "<script") {
+		t.Fatalf("rendered message HTML = %q", result.Messages[0].HTML)
+	}
+}
+
 func TestMiddlewareRejectsOversizedBodiesAndRecoversPanics(t *testing.T) {
 	handler, _, scanner, _, _, _ := testHandler(t)
 	large := `{"agent":"` + strings.Repeat("x", maxJSONBody) + `"}`
