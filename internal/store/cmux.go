@@ -152,6 +152,24 @@ func (s *Store) CmuxState(ctx context.Context, sessionID string) (CmuxSessionSta
 	return state, true, nil
 }
 
+// OpenCmuxSessionIDs lists imported sessions currently matched to open cmux tabs.
+func (s *Store) OpenCmuxSessionIDs(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT session_id FROM cmux_session_state WHERE open = 1 ORDER BY session_id`)
+	if err != nil {
+		return nil, fmt.Errorf("list open cmux sessions: %w", err)
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan open cmux session: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 // OpenCmuxSessionsInWorkspace returns how many matched open sessions share a workspace.
 func (s *Store) OpenCmuxSessionsInWorkspace(ctx context.Context, workspaceID string) (int, error) {
 	var count int

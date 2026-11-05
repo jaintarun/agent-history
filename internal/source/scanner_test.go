@@ -114,6 +114,57 @@ func TestCodexScanIsIdempotentAndInvalidatesOnlyChangedSuffix(t *testing.T) {
 	}
 }
 
+func TestRefreshIfChangedSkipsUnchangedAndToolOnlySourceUpdates(t *testing.T) {
+	ctx := context.Background()
+	home := t.TempDir()
+	path := filepath.Join(home, "sessions", "2026", "07", "rollout.jsonl")
+	fixture, err := os.ReadFile(filepath.Join("codex", "testdata", "basic.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, fixture, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	database, err := store.Open(ctx, filepath.Join(t.TempDir(), "history.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	scanner := source.NewScanner(database, codex.New(home))
+	if _, err := scanner.Scan(ctx, "codex"); err != nil {
+		t.Fatal(err)
+	}
+	id := source.StableID("codex", "11111111-1111-4111-8111-111111111111")
+	if _, changed, err := scanner.RefreshIfChanged(ctx, id); err != nil || changed {
+		t.Fatalf("unchanged refresh: changed=%v err=%v", changed, err)
+	}
+	toolOnly := append(append([]byte(nil), fixture...), []byte(`{"timestamp":"2026-07-01T10:05:00Z","type":"response_item","payload":{"type":"function_call","name":"shell","arguments":"{}"}}`+"\n")...)
+	if err := os.WriteFile(path, toolOnly, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	touchFuture(t, path)
+	if _, changed, err := scanner.RefreshIfChanged(ctx, id); err != nil || changed {
+		t.Fatalf("tool-only refresh: changed=%v err=%v", changed, err)
+	}
+	visible := append(toolOnly, []byte(`{"timestamp":"2026-07-01T10:06:00Z","type":"event_msg","payload":{"type":"user_message","message":"New feature request."}}`+"\n")...)
+	if err := os.WriteFile(path, visible, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	touchFuture(t, path)
+	if _, changed, err := scanner.RefreshIfChanged(ctx, id); err != nil || !changed {
+		t.Fatalf("visible refresh: changed=%v err=%v", changed, err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := scanner.RefreshIfChanged(ctx, id); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing source error = %v", err)
+	}
+}
+
 func TestCodexScanRemovesPreviouslyImportedSubagent(t *testing.T) {
 	ctx := context.Background()
 	home := t.TempDir()

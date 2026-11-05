@@ -79,6 +79,27 @@ func (s *Scanner) Rescan(ctx context.Context, sessionID string) (store.ImportRes
 	return s.store.ImportSession(ctx, imported.Session, imported.Messages)
 }
 
+// RefreshIfChanged rereads one session only when its source file metadata has
+// changed. Its changed result reflects visible conversation, not tool records.
+func (s *Scanner) RefreshIfChanged(ctx context.Context, sessionID string) (store.ImportResult, bool, error) {
+	detail, err := s.store.GetSession(ctx, sessionID)
+	if err != nil {
+		return store.ImportResult{}, false, err
+	}
+	info, err := os.Stat(detail.Session.SourcePath)
+	if err != nil {
+		return store.ImportResult{}, false, fmt.Errorf("stat session source: %w", err)
+	}
+	if info.Size() == detail.Session.SourceSize && info.ModTime().UTC().Equal(detail.Session.SourceMTime) {
+		return store.ImportResult{}, false, nil
+	}
+	result, err := s.Rescan(ctx, sessionID)
+	if err != nil {
+		return store.ImportResult{}, false, err
+	}
+	return result, result.Changed, nil
+}
+
 // NewScanner constructs a transcript scanner.
 func NewScanner(database *store.Store, sources ...Source) *Scanner {
 	return &Scanner{store: database, sources: sources, scanSlot: make(chan struct{}, 1)}

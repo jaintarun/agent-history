@@ -798,6 +798,28 @@ func TestReplaceCmuxSnapshotTracksOpenStateAndPushProvenance(t *testing.T) {
 	}
 }
 
+func TestOpenCmuxSessionIDsExcludesClosedSessions(t *testing.T) {
+	database := openTestStore(t)
+	ctx := context.Background()
+	for _, id := range []string{"a", "b", "c"} {
+		if err := database.UpsertSession(ctx, testSession(id)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := database.ReplaceCmuxSnapshot(ctx, CmuxStatus{Available: true}, []CmuxSessionState{
+		{SessionID: "b", Open: true}, {SessionID: "a", Open: true}, {SessionID: "c", Open: false},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ids, err := database.OpenCmuxSessionIDs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(ids, []string{"a", "b"}) {
+		t.Fatalf("open IDs = %v", ids)
+	}
+}
+
 func TestSessionsByNativeIdentity(t *testing.T) {
 	database := openTestStore(t)
 	ctx := context.Background()
