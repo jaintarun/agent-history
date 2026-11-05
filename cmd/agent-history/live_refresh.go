@@ -29,6 +29,7 @@ func startLiveRefreshLoop(ctx context.Context, database liveSessionStore, scanne
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
+		attempts := make(map[string]int)
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
@@ -36,14 +37,14 @@ func startLiveRefreshLoop(ctx context.Context, database liveSessionStore, scanne
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				refreshLiveSessions(ctx, database, scanner, queue, load, logger)
+				refreshLiveSessions(ctx, database, scanner, queue, load, attempts, logger)
 			}
 		}
 	}()
 	return done
 }
 
-func refreshLiveSessions(ctx context.Context, database liveSessionStore, scanner liveSessionScanner, queue liveAnalysisQueue, load liveAnalysisSettings, logger *slog.Logger) {
+func refreshLiveSessions(ctx context.Context, database liveSessionStore, scanner liveSessionScanner, queue liveAnalysisQueue, load liveAnalysisSettings, attempts map[string]int, logger *slog.Logger) {
 	options, auto, err := load(ctx)
 	if err != nil {
 		logLiveRefreshError(logger, "load analysis settings", "", err)
@@ -66,6 +67,9 @@ func refreshLiveSessions(ctx context.Context, database liveSessionStore, scanner
 		if !auto {
 			continue
 		}
+		if changed {
+			delete(attempts, id)
+		}
 		if !changed {
 			needed, err := database.NeedsLiveRefocus(ctx, id, options.PromptVersion)
 			if err != nil {
@@ -73,10 +77,16 @@ func refreshLiveSessions(ctx context.Context, database liveSessionStore, scanner
 				continue
 			}
 			if !needed {
+				delete(attempts, id)
 				continue
 			}
 		}
-		if _, err := queue.EnqueueLive(ctx, id, options); err != nil && !errors.Is(err, analyze.ErrAlreadyQueued) {
+		if attempts[id] >= 2 {
+			continue
+		}
+		if _, err := queue.EnqueueLive(ctx, id, options); err == nil {
+			attempts[id]++
+		} else if !errors.Is(err, analyze.ErrAlreadyQueued) {
 			logLiveRefreshError(logger, "queue live analysis", id, err)
 		}
 	}

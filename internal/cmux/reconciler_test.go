@@ -246,6 +246,7 @@ func TestAutomaticSyncPolicy(t *testing.T) {
 	}{
 		{name: "setting off", auto: false, workspaceTitle: "generic", surfaceTitle: "tab"},
 		{name: "unowned workspace", auto: true, workspaceTitle: "generic", surfaceTitle: "tab", wantWorkspaceCall: true},
+		{name: "blank tab", auto: true, workspaceTitle: "Generated title", workspaceCustom: true, surfaceTitle: "", wantSurfaceCall: true},
 		{name: "previously pushed workspace", auto: true, workspaceTitle: "old", workspaceCustom: true, surfaceTitle: "tab", lastWorkspace: "old", wantWorkspaceCall: true},
 		{name: "independently changed workspace", auto: true, workspaceTitle: "manual", workspaceCustom: true, surfaceTitle: "tab", lastWorkspace: "old"},
 		{name: "previously pushed tab", auto: true, workspaceTitle: "Generated title", workspaceCustom: true, surfaceTitle: "old tab", lastSurface: "old tab", wantSurfaceCall: true},
@@ -349,6 +350,55 @@ func TestAutomaticDescriptionSyncPolicy(t *testing.T) {
 				t.Fatalf("description calls = %#v", api.descriptionCalls)
 			}
 		})
+	}
+}
+
+func TestReplacementMetadataSyncsToCmuxWithoutOverwritingManualChanges(t *testing.T) {
+	database := openReconcilerStore(t)
+	ctx := context.Background()
+	upsertAnalyzedSession(t, database, "session", "codex", "native", "Older work", "current")
+	if err := database.SetSetting(ctx, "cmux.title_sync", "true"); err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+	writeHookFixture(t, home, "codex", hookJSON("native", "w1", "s1", "idle"))
+	api := &fakeAPI{
+		capabilities: Capabilities{AccessMode: "allowAll"},
+		workspaces:   []Workspace{{ID: "w1"}},
+		surfaces:     map[string][]Surface{"w1": {{ID: "s1"}}},
+	}
+	reconciler := NewReconciler(api, database, home, slog.Default())
+	if err := reconciler.Refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.ReplaceAnalysis(ctx, "session", store.Analysis{
+		Title: "Latest cache migration", Summary: "Migrated cache, after earlier work.",
+		Status: "current", Provider: "fake", Model: "test", PromptVersion: "v1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	api.clearCalls()
+	if err := reconciler.Refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if api.workspaces[0].Title != "Latest cache migration" || api.workspaces[0].Description != "Migrated cache, after earlier work." || api.surfaces["w1"][0].Title != "Latest cache migration" {
+		t.Fatalf("replacement metadata not synced: workspace=%#v surface=%#v", api.workspaces[0], api.surfaces["w1"][0])
+	}
+	api.workspaces[0].Title = "Manual workspace"
+	api.workspaces[0].Description = "Manual description"
+	api.surfaces["w1"][0].Title = "Manual tab"
+	if err := database.ReplaceAnalysis(ctx, "session", store.Analysis{
+		Title: "Another live topic", Summary: "New outcome.",
+		Status: "current", Provider: "fake", Model: "test", PromptVersion: "v1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	api.clearCalls()
+	if err := reconciler.Refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if api.workspaces[0].Title != "Manual workspace" || api.workspaces[0].Description != "Manual description" || api.surfaces["w1"][0].Title != "Manual tab" {
+		t.Fatalf("manual cmux metadata overwritten: workspace=%#v surface=%#v", api.workspaces[0], api.surfaces["w1"][0])
 	}
 }
 

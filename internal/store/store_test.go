@@ -854,6 +854,12 @@ func TestNeedsLiveRefocusOnlyForCurrentAnalysisWithoutLiveRoot(t *testing.T) {
 	if needed, err := database.NeedsLiveRefocus(ctx, "live", "v1"); err != nil || !needed {
 		t.Fatalf("queued historical job needs promotion = %v, %v", needed, err)
 	}
+	if err := database.SetAnalysisStatus(ctx, "live", "partial", ""); err != nil {
+		t.Fatal(err)
+	}
+	if needed, err := database.NeedsLiveRefocus(ctx, "live", "v1"); err != nil || !needed {
+		t.Fatalf("partial import needs retry = %v, %v", needed, err)
+	}
 	if err := database.SetAnalysisStatus(ctx, "live", "current", ""); err != nil {
 		t.Fatal(err)
 	}
@@ -871,7 +877,7 @@ func TestNeedsLiveRefocusOnlyForCurrentAnalysisWithoutLiveRoot(t *testing.T) {
 	if err := database.SetAnalysisStatus(ctx, "live", "failed", "model unavailable"); err != nil {
 		t.Fatal(err)
 	}
-	if needed, err := database.NeedsLiveRefocus(ctx, "live", "v2"); err != nil || needed {
+	if needed, err := database.NeedsLiveRefocus(ctx, "live", "v2"); err != nil || !needed {
 		t.Fatalf("failed root needs refocus = %v, %v", needed, err)
 	}
 }

@@ -362,10 +362,11 @@ func TestLiveRefreshQueuesChangedAndOneTimeRefocus(t *testing.T) {
 	database := &fakeLiveStore{ids: []string{"changed", "old-root", "current"}, needs: map[string]bool{"old-root": true}}
 	scanner := &fakeLiveScanner{changed: map[string]bool{"changed": true}}
 	queue := &fakeLiveQueue{}
+	attempts := make(map[string]int)
 	load := func(context.Context) (analyze.Options, bool, error) {
 		return analyze.Options{Provider: "fake", PromptVersion: "v1"}, true, nil
 	}
-	refreshLiveSessions(context.Background(), database, scanner, queue, load, nil)
+	refreshLiveSessions(context.Background(), database, scanner, queue, load, attempts, nil)
 	if got := strings.Join(queue.ids, ","); got != "changed,old-root" {
 		t.Fatalf("queued live sessions = %q", got)
 	}
@@ -374,7 +375,7 @@ func TestLiveRefreshQueuesChangedAndOneTimeRefocus(t *testing.T) {
 	}
 	queue.ids = nil
 	database.needs["old-root"] = false
-	refreshLiveSessions(context.Background(), database, scanner, queue, load, nil)
+	refreshLiveSessions(context.Background(), database, scanner, queue, load, attempts, nil)
 	if got := strings.Join(queue.ids, ","); got != "changed" {
 		t.Fatalf("second refresh queued = %q", got)
 	}
@@ -384,16 +385,17 @@ func TestLiveRefreshSkipsWhenAutoAnalysisOffAndContinuesAfterSourceError(t *test
 	database := &fakeLiveStore{ids: []string{"missing", "changed"}}
 	scanner := &fakeLiveScanner{changed: map[string]bool{"changed": true}, failures: map[string]error{"missing": os.ErrNotExist}}
 	queue := &fakeLiveQueue{}
+	attempts := make(map[string]int)
 	auto := false
 	load := func(context.Context) (analyze.Options, bool, error) {
 		return analyze.Options{Provider: "fake", PromptVersion: "v1"}, auto, nil
 	}
-	refreshLiveSessions(context.Background(), database, scanner, queue, load, nil)
+	refreshLiveSessions(context.Background(), database, scanner, queue, load, attempts, nil)
 	if got := strings.Join(scanner.ids, ","); got != "missing,changed" || len(queue.ids) != 0 {
 		t.Fatalf("auto-disabled refresh scanned=%v queued=%v", scanner.ids, queue.ids)
 	}
 	auto = true
-	refreshLiveSessions(context.Background(), database, scanner, queue, load, nil)
+	refreshLiveSessions(context.Background(), database, scanner, queue, load, attempts, nil)
 	if got := strings.Join(queue.ids, ","); got != "changed" {
 		t.Fatalf("source error stopped later session: %q", got)
 	}
@@ -417,6 +419,34 @@ func TestLiveRefreshLoopStopsOnCancellation(t *testing.T) {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("live refresh did not stop")
+	}
+}
+
+func TestLiveRefreshRetriesQueueFullAndBoundsFailedAnalysis(t *testing.T) {
+	database := &fakeLiveStore{ids: []string{"live"}, needs: map[string]bool{"live": true}}
+	scanner := &fakeLiveScanner{changed: map[string]bool{}}
+	queue := &fakeLiveQueue{err: analyze.ErrQueueFull}
+	attempts := make(map[string]int)
+	load := func(context.Context) (analyze.Options, bool, error) {
+		return analyze.Options{Provider: "fake", PromptVersion: "v1"}, true, nil
+	}
+	for range 3 {
+		refreshLiveSessions(context.Background(), database, scanner, queue, load, attempts, nil)
+	}
+	if len(queue.ids) != 3 {
+		t.Fatalf("queue-full retries = %d, want 3", len(queue.ids))
+	}
+	queue.err = nil
+	for range 3 {
+		refreshLiveSessions(context.Background(), database, scanner, queue, load, attempts, nil)
+	}
+	if len(queue.ids) != 5 {
+		t.Fatalf("submitted attempts = %d, want 2 after queue-full retries", len(queue.ids)-3)
+	}
+	scanner.changed["live"] = true
+	refreshLiveSessions(context.Background(), database, scanner, queue, load, attempts, nil)
+	if len(queue.ids) != 6 {
+		t.Fatalf("new source revision did not reset retry budget: %v", queue.ids)
 	}
 }
 
@@ -448,11 +478,15 @@ func (s *fakeLiveScanner) RefreshIfChanged(_ context.Context, id string) (store.
 type fakeLiveQueue struct {
 	ids     []string
 	options []analyze.Options
+	err     error
 }
 
 func (q *fakeLiveQueue) EnqueueLive(_ context.Context, id string, options analyze.Options) (<-chan error, error) {
 	q.ids = append(q.ids, id)
 	q.options = append(q.options, options)
+	if q.err != nil {
+		return nil, q.err
+	}
 	return make(chan error, 1), nil
 }
 

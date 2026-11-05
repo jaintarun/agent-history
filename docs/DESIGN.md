@@ -393,7 +393,10 @@ work as condensed context; a single long topic also supplies its newest leaf
 summaries. These fields replace Agent History's stored metadata and are then
 eligible for ordinary cmux synchronization. The live root has a separate cache
 identity, so the first refocus reuses existing leaves and topics, and unchanged
-subsequent checks make no model call. Topic chapters remain chronological.
+subsequent checks make no model call. Queue-full live work is retried on later
+checks; failed generation gets one automatic retry per source revision during a
+service run, preserving the previous visible metadata. Topic chapters remain
+chronological.
 
 The visible hierarchy remains exactly three generated levels:
 

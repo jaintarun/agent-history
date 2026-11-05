@@ -435,6 +435,37 @@ func TestSessionReadEndpoints(t *testing.T) {
 	}
 }
 
+func TestReplacementMetadataAppearsInDetailAndSearch(t *testing.T) {
+	handler, database, _, _, _, _ := testHandler(t)
+	ctx := context.Background()
+	if err := database.ReplaceAnalysis(ctx, "session-1", store.Analysis{
+		Title: "Latest cache migration", Summary: "Migrated the cache; earlier login retry work is complete.",
+		Status: "current", Provider: "fake", Model: "test", PromptVersion: "v1",
+		Segments: []store.Segment{{Position: 0, StartSequence: 0, EndSequence: 1, Title: "Login", Summary: "Fixed retry"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	response := serve(handler, apiRequest(http.MethodGet, "/test-token/api/sessions/session-1", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("detail status = %d body=%s", response.Code, response.Body.String())
+	}
+	var detail map[string]any
+	decodeResponse(t, response, &detail)
+	if detail["title"] != "Latest cache migration" || detail["summary"] != "Migrated the cache; earlier login retry work is complete." {
+		t.Fatalf("replacement detail = %#v", detail)
+	}
+	response = serve(handler, apiRequest(http.MethodGet, "/test-token/api/sessions?q=cache+migration", nil))
+	var search struct {
+		Sessions []struct {
+			ID string `json:"id"`
+		} `json:"sessions"`
+	}
+	decodeResponse(t, response, &search)
+	if len(search.Sessions) != 1 || search.Sessions[0].ID != "session-1" {
+		t.Fatalf("replacement metadata not searchable: %#v", search)
+	}
+}
+
 func TestCmuxSessionStateAndFiltering(t *testing.T) {
 	application, database, _, _, _, _ := testHandler(t)
 	observedAt := time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC)

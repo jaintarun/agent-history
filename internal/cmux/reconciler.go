@@ -286,7 +286,8 @@ func (r *Reconciler) syncEligibleTitles(ctx context.Context, snapshot liveSnapsh
 				wrote = true
 			}
 		}
-		if state.LastPushedSurfaceTitle != "" && observed.SurfaceTitle == state.LastPushedSurfaceTitle &&
+		if (strings.TrimSpace(observed.SurfaceTitle) == "" ||
+			(state.LastPushedSurfaceTitle != "" && observed.SurfaceTitle == state.LastPushedSurfaceTitle)) &&
 			strings.TrimSpace(observed.SurfaceTitle) != title {
 			if err := r.api.RenameSurface(ctx, observed.WorkspaceID, observed.SurfaceID, title); err != nil {
 				syncErrors = append(syncErrors, fmt.Errorf("rename cmux tab for session %s: %w", sessionID, err))
