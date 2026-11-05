@@ -119,6 +119,111 @@ func TestWorkerFullQueueLeavesSessionPending(t *testing.T) {
 	close(analyzer.release)
 }
 
+func TestWorkerRunsLiveJobBeforeQueuedHistoricalJob(t *testing.T) {
+	database, first := analysisFixture(t)
+	for _, id := range []string{"historical", "live"} {
+		session := first
+		session.ID = id
+		session.NativeSessionID = "native-" + id
+		session.SourcePath = "/tmp/" + id + ".jsonl"
+		if _, err := database.ImportSession(context.Background(), session, analysisMessages()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	analyzer := &blockingAnalyzer{started: make(chan struct{}), release: make(chan struct{})}
+	worker := NewWorker(database, NewEngine(database, map[string]Analyzer{"tracking": analyzer}), 1)
+	t.Cleanup(worker.Close)
+	options := Options{Provider: "tracking", Model: "test", PromptVersion: "v1", NormalizerVersion: "v1", LeafTargetChars: 10_000, RollupFanout: 8}
+	firstDone, err := worker.Enqueue(context.Background(), first.ID, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-analyzer.started
+	historicalDone, err := worker.Enqueue(context.Background(), "historical", options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	liveDone, err := worker.EnqueueLive(context.Background(), "live", options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := worker.EnqueueLive(context.Background(), "live", options); !errors.Is(err, ErrAlreadyQueued) {
+		t.Fatalf("duplicate live enqueue error = %v", err)
+	}
+	close(analyzer.release)
+	if err := <-firstDone; err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-historicalDone:
+		t.Fatalf("historical job finished before live job: %v", err)
+	case err := <-liveDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := <-historicalDone; err != nil {
+		t.Fatal(err)
+	}
+	if analyzer.tracker.maxActive != 1 {
+		t.Fatalf("maximum concurrent model calls = %d", analyzer.tracker.maxActive)
+	}
+}
+
+func TestWorkerAllowsHistoricalProgressDuringLiveBacklog(t *testing.T) {
+	database, first := analysisFixture(t)
+	for _, id := range []string{"historical", "live-1", "live-2", "live-3", "live-4"} {
+		session := first
+		session.ID = id
+		session.NativeSessionID = "native-" + id
+		session.SourcePath = "/tmp/" + id + ".jsonl"
+		if _, err := database.ImportSession(context.Background(), session, analysisMessages()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	analyzer := &blockingAnalyzer{started: make(chan struct{}), release: make(chan struct{})}
+	worker := NewWorker(database, NewEngine(database, map[string]Analyzer{"tracking": analyzer}), 4)
+	t.Cleanup(worker.Close)
+	options := Options{Provider: "tracking", Model: "test", PromptVersion: "v1", NormalizerVersion: "v1", LeafTargetChars: 10_000, RollupFanout: 8}
+	firstDone, err := worker.Enqueue(context.Background(), first.ID, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-analyzer.started
+	historicalDone, err := worker.Enqueue(context.Background(), "historical", options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var liveDone []<-chan error
+	for _, id := range []string{"live-1", "live-2", "live-3", "live-4"} {
+		done, err := worker.EnqueueLive(context.Background(), id, options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		liveDone = append(liveDone, done)
+	}
+	close(analyzer.release)
+	if err := <-firstDone; err != nil {
+		t.Fatal(err)
+	}
+	for _, done := range liveDone[:3] {
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	}
+	select {
+	case err := <-historicalDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-liveDone[3]:
+		t.Fatal("fourth live job finished before historical job")
+	}
+	if err := <-liveDone[3]; err != nil {
+		t.Fatal(err)
+	}
+}
+
 type blockingAnalyzer struct {
 	started chan struct{}
 	release chan struct{}

@@ -21,14 +21,16 @@ var (
 
 // Worker serializes analysis requests to protect subscription usage.
 type Worker struct {
-	engine  *Engine
-	store   *store.Store
-	ctx     context.Context
-	cancel  context.CancelFunc
-	queue   chan queuedAnalysis
-	wg      sync.WaitGroup
-	mu      sync.Mutex
-	pending map[string]bool
+	engine     *Engine
+	store      *store.Store
+	ctx        context.Context
+	cancel     context.CancelFunc
+	queue      chan queuedAnalysis
+	liveQueue  chan queuedAnalysis
+	wg         sync.WaitGroup
+	mu         sync.Mutex
+	pending    map[string]bool
+	liveStreak int
 }
 
 type queuedAnalysis struct {
@@ -54,6 +56,7 @@ func NewWorker(database *store.Store, engine *Engine, queueCapacity int) *Worker
 	worker := &Worker{
 		engine: engine, store: database, ctx: ctx, cancel: cancel,
 		queue: make(chan queuedAnalysis, queueCapacity), pending: make(map[string]bool),
+		liveQueue: make(chan queuedAnalysis, queueCapacity),
 	}
 	worker.wg.Add(1)
 	go worker.run()
@@ -70,7 +73,20 @@ func (w *Worker) Enqueue(ctx context.Context, sessionID string, options Options)
 	if len(detail.Messages) == 0 {
 		return nil, ErrNoVisibleMessages
 	}
-	return w.enqueue(ctx, sessionID, options, queueAnalysis, detail.Session.AnalysisStatus, detail.Session.AnalysisError)
+	return w.enqueue(ctx, sessionID, options, queueAnalysis, false, detail.Session.AnalysisStatus, detail.Session.AnalysisError)
+}
+
+// EnqueueLive prioritizes a changed open session without interrupting the
+// currently running analysis or discarding historical work.
+func (w *Worker) EnqueueLive(ctx context.Context, sessionID string, options Options) (<-chan error, error) {
+	detail, err := w.store.GetSession(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	if len(detail.Messages) == 0 {
+		return nil, ErrNoVisibleMessages
+	}
+	return w.enqueue(ctx, sessionID, options, queueAnalysis, true, detail.Session.AnalysisStatus, detail.Session.AnalysisError)
 }
 
 // EnqueueRetitle schedules one title-only model call through the same serialized
@@ -83,10 +99,10 @@ func (w *Worker) EnqueueRetitle(ctx context.Context, sessionID string, options O
 	if len(detail.Segments) == 0 {
 		return nil, ErrNoTopics
 	}
-	return w.enqueue(ctx, sessionID, options, queueRetitle, detail.Session.AnalysisStatus, detail.Session.AnalysisError)
+	return w.enqueue(ctx, sessionID, options, queueRetitle, false, detail.Session.AnalysisStatus, detail.Session.AnalysisError)
 }
 
-func (w *Worker) enqueue(ctx context.Context, sessionID string, options Options, kind queueKind, previousStatus, previousError string) (<-chan error, error) {
+func (w *Worker) enqueue(ctx context.Context, sessionID string, options Options, kind queueKind, live bool, previousStatus, previousError string) (<-chan error, error) {
 	w.mu.Lock()
 	if w.pending[sessionID] {
 		w.mu.Unlock()
@@ -105,8 +121,12 @@ func (w *Worker) enqueue(ctx context.Context, sessionID string, options Options,
 	}
 	done := make(chan error, 1)
 	job := queuedAnalysis{sessionID: sessionID, options: options, kind: kind, done: done}
+	queue := w.queue
+	if live {
+		queue = w.liveQueue
+	}
 	select {
-	case w.queue <- job:
+	case queue <- job:
 		return done, nil
 	case <-ctx.Done():
 		removePending()
@@ -133,27 +153,62 @@ func (w *Worker) Close() {
 func (w *Worker) run() {
 	defer w.wg.Done()
 	for {
-		select {
-		case <-w.ctx.Done():
+		job, ok := w.next()
+		if !ok {
 			w.drain()
 			return
-		case job := <-w.queue:
-			var err error
-			if job.kind == queueRetitle {
-				_, err = w.engine.Retitle(w.ctx, job.sessionID, job.options)
-			} else {
-				_, err = w.engine.Analyze(w.ctx, job.sessionID, job.options)
-			}
-			w.removePending(job.sessionID)
-			job.done <- err
-			close(job.done)
 		}
+		var err error
+		if job.kind == queueRetitle {
+			_, err = w.engine.Retitle(w.ctx, job.sessionID, job.options)
+		} else {
+			_, err = w.engine.Analyze(w.ctx, job.sessionID, job.options)
+		}
+		w.removePending(job.sessionID)
+		job.done <- err
+		close(job.done)
+	}
+}
+
+func (w *Worker) next() (queuedAnalysis, bool) {
+	select {
+	case <-w.ctx.Done():
+		return queuedAnalysis{}, false
+	default:
+	}
+	if w.liveStreak >= 3 {
+		select {
+		case job := <-w.queue:
+			w.liveStreak = 0
+			return job, true
+		default:
+		}
+	}
+	select {
+	case job := <-w.liveQueue:
+		w.liveStreak++
+		return job, true
+	default:
+	}
+	select {
+	case <-w.ctx.Done():
+		return queuedAnalysis{}, false
+	case job := <-w.liveQueue:
+		w.liveStreak++
+		return job, true
+	case job := <-w.queue:
+		w.liveStreak = 0
+		return job, true
 	}
 }
 
 func (w *Worker) drain() {
 	for {
 		select {
+		case job := <-w.liveQueue:
+			w.removePending(job.sessionID)
+			job.done <- context.Canceled
+			close(job.done)
 		case job := <-w.queue:
 			w.removePending(job.sessionID)
 			job.done <- context.Canceled
