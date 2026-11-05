@@ -358,6 +358,104 @@ func TestScanLoopRunsStartupAndPeriodicScansUntilCancelled(t *testing.T) {
 	}
 }
 
+func TestLiveRefreshQueuesChangedAndOneTimeRefocus(t *testing.T) {
+	database := &fakeLiveStore{ids: []string{"changed", "old-root", "current"}, needs: map[string]bool{"old-root": true}}
+	scanner := &fakeLiveScanner{changed: map[string]bool{"changed": true}}
+	queue := &fakeLiveQueue{}
+	load := func(context.Context) (analyze.Options, bool, error) {
+		return analyze.Options{Provider: "fake", PromptVersion: "v1"}, true, nil
+	}
+	refreshLiveSessions(context.Background(), database, scanner, queue, load, nil)
+	if got := strings.Join(queue.ids, ","); got != "changed,old-root" {
+		t.Fatalf("queued live sessions = %q", got)
+	}
+	if len(queue.options) != 2 || queue.options[0].PromptVersion != "v1" {
+		t.Fatalf("queued options = %#v", queue.options)
+	}
+	queue.ids = nil
+	database.needs["old-root"] = false
+	refreshLiveSessions(context.Background(), database, scanner, queue, load, nil)
+	if got := strings.Join(queue.ids, ","); got != "changed" {
+		t.Fatalf("second refresh queued = %q", got)
+	}
+}
+
+func TestLiveRefreshSkipsWhenAutoAnalysisOffAndContinuesAfterSourceError(t *testing.T) {
+	database := &fakeLiveStore{ids: []string{"missing", "changed"}}
+	scanner := &fakeLiveScanner{changed: map[string]bool{"changed": true}, failures: map[string]error{"missing": os.ErrNotExist}}
+	queue := &fakeLiveQueue{}
+	auto := false
+	load := func(context.Context) (analyze.Options, bool, error) {
+		return analyze.Options{Provider: "fake", PromptVersion: "v1"}, auto, nil
+	}
+	refreshLiveSessions(context.Background(), database, scanner, queue, load, nil)
+	if got := strings.Join(scanner.ids, ","); got != "missing,changed" || len(queue.ids) != 0 {
+		t.Fatalf("auto-disabled refresh scanned=%v queued=%v", scanner.ids, queue.ids)
+	}
+	auto = true
+	refreshLiveSessions(context.Background(), database, scanner, queue, load, nil)
+	if got := strings.Join(queue.ids, ","); got != "changed" {
+		t.Fatalf("source error stopped later session: %q", got)
+	}
+}
+
+func TestLiveRefreshLoopStopsOnCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	database := &fakeLiveStore{ids: []string{"live"}}
+	scanner := &fakeLiveScanner{changed: map[string]bool{"live": true}, calls: make(chan struct{}, 2)}
+	queue := &fakeLiveQueue{}
+	done := startLiveRefreshLoop(ctx, database, scanner, queue, func(context.Context) (analyze.Options, bool, error) {
+		return analyze.Options{Provider: "fake", PromptVersion: "v1"}, true, nil
+	}, 10*time.Millisecond, nil)
+	select {
+	case <-scanner.calls:
+	case <-time.After(time.Second):
+		t.Fatal("live refresh did not tick")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("live refresh did not stop")
+	}
+}
+
+type fakeLiveStore struct {
+	ids   []string
+	needs map[string]bool
+}
+
+func (s *fakeLiveStore) OpenCmuxSessionIDs(context.Context) ([]string, error) { return s.ids, nil }
+func (s *fakeLiveStore) NeedsLiveRefocus(_ context.Context, id, _ string) (bool, error) {
+	return s.needs[id], nil
+}
+
+type fakeLiveScanner struct {
+	changed  map[string]bool
+	failures map[string]error
+	ids      []string
+	calls    chan struct{}
+}
+
+func (s *fakeLiveScanner) RefreshIfChanged(_ context.Context, id string) (store.ImportResult, bool, error) {
+	s.ids = append(s.ids, id)
+	if s.calls != nil {
+		s.calls <- struct{}{}
+	}
+	return store.ImportResult{Changed: s.changed[id]}, s.changed[id], s.failures[id]
+}
+
+type fakeLiveQueue struct {
+	ids     []string
+	options []analyze.Options
+}
+
+func (q *fakeLiveQueue) EnqueueLive(_ context.Context, id string, options analyze.Options) (<-chan error, error) {
+	q.ids = append(q.ids, id)
+	q.options = append(q.options, options)
+	return make(chan error, 1), nil
+}
+
 type countingScanner struct {
 	calls   chan struct{}
 	active  atomic.Int32

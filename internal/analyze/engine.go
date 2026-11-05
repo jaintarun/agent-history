@@ -481,22 +481,32 @@ func (s *runState) generate(ctx context.Context, kind RequestKind, prompt string
 
 func (s *runState) newNode(kind string, position, start, end int, inputHash string, raw json.RawMessage, sealed bool) store.SummaryNode {
 	now := s.engine.now().UTC()
+	options := s.nodeOptions(kind)
 	return store.SummaryNode{
-		ID:        nodeID(s.sessionID, kind, start, end, inputHash, s.options),
+		ID:        nodeID(s.sessionID, kind, start, end, inputHash, options),
 		SessionID: s.sessionID, Kind: kind, Position: position,
 		StartSequence: start, EndSequence: end, InputHash: inputHash,
 		SummaryJSON: string(raw), Sealed: sealed, Provider: s.options.Provider,
-		Model: s.options.Model, PromptVersion: s.options.PromptVersion,
+		Model: s.options.Model, PromptVersion: options.PromptVersion,
 		NormalizerVersion: s.options.NormalizerVersion, CreatedAt: now, UpdatedAt: now,
 	}
 }
 
 func (s *runState) cacheKey(kind string, start, end int, inputHash string) store.NodeCacheKey {
+	options := s.nodeOptions(kind)
 	return store.NodeCacheKey{
 		SessionID: s.sessionID, Kind: kind, StartSequence: start, EndSequence: end,
 		InputHash: inputHash, Provider: s.options.Provider, Model: s.options.Model,
-		PromptVersion: s.options.PromptVersion, NormalizerVersion: s.options.NormalizerVersion,
+		PromptVersion: options.PromptVersion, NormalizerVersion: s.options.NormalizerVersion,
 	}
+}
+
+func (s *runState) nodeOptions(kind string) Options {
+	options := s.options
+	if kind == "session" && options.LiveRecency {
+		options.PromptVersion += "/live-root-v1"
+	}
+	return options
 }
 
 func leafPrompt(start, end int, projection string) string {

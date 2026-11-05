@@ -13,7 +13,8 @@ self-contained SQLite-backed web app.
   state, and whether the session is open in cmux.
 - **Keep history current automatically.** The background service finds new and
   updated sessions, refreshes affected summaries, and keeps running after login
-  or reboot.
+  or reboot. Open cmux sessions get a targeted source check every five minutes;
+  their title and overview lead with the latest work.
 - **Keep cmux organized.** Compare cmux and generated metadata, send a better
   title and short description to cmux manually, or enable automatic sync.
   Active agent sessions also show live state and activity colors.

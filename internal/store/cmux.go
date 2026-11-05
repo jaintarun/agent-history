@@ -170,6 +170,22 @@ func (s *Store) OpenCmuxSessionIDs(ctx context.Context) ([]string, error) {
 	return ids, rows.Err()
 }
 
+// NeedsLiveRefocus identifies an existing current analysis whose root still
+// uses the historical, rather than live-recency, metadata policy.
+func (s *Store) NeedsLiveRefocus(ctx context.Context, sessionID, promptVersion string) (bool, error) {
+	var needed bool
+	err := s.db.QueryRowContext(ctx, `
+        SELECT analysis_status IN ('current', 'queued') AND NOT EXISTS (
+            SELECT 1 FROM summary_nodes
+            WHERE session_id = sessions.id AND kind = 'session' AND prompt_version = ?
+        )
+        FROM sessions WHERE id = ?`, promptVersion+"/live-root-v1", sessionID).Scan(&needed)
+	if err != nil {
+		return false, fmt.Errorf("check live root: %w", err)
+	}
+	return needed, nil
+}
+
 // OpenCmuxSessionsInWorkspace returns how many matched open sessions share a workspace.
 func (s *Store) OpenCmuxSessionsInWorkspace(ctx context.Context, workspaceID string) (int, error) {
 	var count int

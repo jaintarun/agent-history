@@ -170,6 +170,61 @@ func TestWorkerRunsLiveJobBeforeQueuedHistoricalJob(t *testing.T) {
 	}
 }
 
+func TestWorkerPromotesAlreadyQueuedLiveSession(t *testing.T) {
+	database, first := analysisFixture(t)
+	for _, id := range []string{"historical", "live"} {
+		session := first
+		session.ID = id
+		session.NativeSessionID = "native-" + id
+		session.SourcePath = "/tmp/" + id + ".jsonl"
+		if _, err := database.ImportSession(context.Background(), session, analysisMessages()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	analyzer := &blockingAnalyzer{started: make(chan struct{}), release: make(chan struct{})}
+	worker := NewWorker(database, NewEngine(database, map[string]Analyzer{"tracking": analyzer}), 2)
+	t.Cleanup(worker.Close)
+	options := Options{Provider: "tracking", Model: "test", PromptVersion: "v1", NormalizerVersion: "v1", LeafTargetChars: 10_000, RollupFanout: 8}
+	firstDone, err := worker.Enqueue(context.Background(), first.ID, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-analyzer.started
+	historicalDone, err := worker.Enqueue(context.Background(), "historical", options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	liveDone, err := worker.Enqueue(context.Background(), "live", options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	promotedDone, err := worker.EnqueueLive(context.Background(), "live", options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if promotedDone != liveDone {
+		t.Fatal("promotion returned a different completion channel")
+	}
+	close(analyzer.release)
+	if err := <-firstDone; err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-historicalDone:
+		t.Fatalf("historical job finished before promoted live job: %v", err)
+	case err := <-liveDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := <-historicalDone; err != nil {
+		t.Fatal(err)
+	}
+	if analyzer.tracker.maxActive != 1 {
+		t.Fatalf("maximum concurrent model calls = %d", analyzer.tracker.maxActive)
+	}
+}
+
 func TestWorkerAllowsHistoricalProgressDuringLiveBacklog(t *testing.T) {
 	database, first := analysisFixture(t)
 	for _, id := range []string{"historical", "live-1", "live-2", "live-3", "live-4"} {

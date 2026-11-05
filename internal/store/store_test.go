@@ -820,6 +820,62 @@ func TestOpenCmuxSessionIDsExcludesClosedSessions(t *testing.T) {
 	}
 }
 
+func TestSessionSourceStateByIDReturnsMetadataWithoutConversation(t *testing.T) {
+	database := openTestStore(t)
+	ctx := context.Background()
+	session := testSession("metadata")
+	if err := database.UpsertSession(ctx, session); err != nil {
+		t.Fatal(err)
+	}
+	state, err := database.SessionSourceStateByID(ctx, session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.SourcePath != session.SourcePath || state.SourceSize != session.SourceSize || !state.SourceTime.Equal(session.SourceMTime.UTC()) {
+		t.Fatalf("source state = %#v", state)
+	}
+	if _, err := database.SessionSourceStateByID(ctx, "missing"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing source state error = %v", err)
+	}
+}
+
+func TestNeedsLiveRefocusOnlyForCurrentAnalysisWithoutLiveRoot(t *testing.T) {
+	database := openTestStore(t)
+	ctx := context.Background()
+	if err := database.UpsertSession(ctx, testSession("live")); err != nil {
+		t.Fatal(err)
+	}
+	if needed, err := database.NeedsLiveRefocus(ctx, "live", "v1"); err != nil || needed {
+		t.Fatalf("unanalyzed needs refocus = %v, %v", needed, err)
+	}
+	if err := database.SetAnalysisStatus(ctx, "live", "queued", ""); err != nil {
+		t.Fatal(err)
+	}
+	if needed, err := database.NeedsLiveRefocus(ctx, "live", "v1"); err != nil || !needed {
+		t.Fatalf("queued historical job needs promotion = %v, %v", needed, err)
+	}
+	if err := database.SetAnalysisStatus(ctx, "live", "current", ""); err != nil {
+		t.Fatal(err)
+	}
+	if needed, err := database.NeedsLiveRefocus(ctx, "live", "v1"); err != nil || !needed {
+		t.Fatalf("old root needs refocus = %v, %v", needed, err)
+	}
+	node := testNode("live-root", "live", nil, "session", 0, 0, 1)
+	node.PromptVersion = "v1/live-root-v1"
+	if err := database.PutSummaryNode(ctx, node); err != nil {
+		t.Fatal(err)
+	}
+	if needed, err := database.NeedsLiveRefocus(ctx, "live", "v1"); err != nil || needed {
+		t.Fatalf("refocused root needs refocus = %v, %v", needed, err)
+	}
+	if err := database.SetAnalysisStatus(ctx, "live", "failed", "model unavailable"); err != nil {
+		t.Fatal(err)
+	}
+	if needed, err := database.NeedsLiveRefocus(ctx, "live", "v2"); err != nil || needed {
+		t.Fatalf("failed root needs refocus = %v, %v", needed, err)
+	}
+}
+
 func TestSessionsByNativeIdentity(t *testing.T) {
 	database := openTestStore(t)
 	ctx := context.Background()

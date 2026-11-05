@@ -385,6 +385,16 @@ rollup, and one session rollup. Only the leaf request contains new raw
 conversation; parent requests contain compact child summaries. Work grows with
 the new conversation and the changed tree path rather than total session size.
 
+Matched sessions open in cmux receive a targeted source-file check every five
+minutes, alongside the regular full discovery scan. Material visible-conversation
+changes enter a priority lane of the serialized analysis worker. Their session
+title and overview are generated from newest topic summaries first, with older
+work as condensed context; a single long topic also supplies its newest leaf
+summaries. These fields replace Agent History's stored metadata and are then
+eligible for ordinary cmux synchronization. The live root has a separate cache
+identity, so the first refocus reuses existing leaves and topics, and unchanged
+subsequent checks make no model call. Topic chapters remain chronological.
+
 The visible hierarchy remains exactly three generated levels:
 
 1. session title and overview;

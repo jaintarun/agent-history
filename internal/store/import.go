@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -10,24 +11,41 @@ import (
 // SessionSourceState returns the persisted discovery identity for a native
 // provider session.
 func (s *Store) SessionSourceState(ctx context.Context, agent, nativeSessionID string) (SourceState, bool, error) {
-	var state SourceState
-	var sourceTime string
-	err := s.db.QueryRowContext(ctx, `
+	state, err := scanSourceState(s.db.QueryRowContext(ctx, `
         SELECT id, source_path, source_size, source_mtime, source_hash
-        FROM sessions WHERE agent = ? AND native_session_id = ?`,
-		agent, nativeSessionID,
-	).Scan(&state.SessionID, &state.SourcePath, &state.SourceSize, &sourceTime, &state.SourceHash)
-	if err == sql.ErrNoRows {
+        FROM sessions WHERE agent = ? AND native_session_id = ?`, agent, nativeSessionID))
+	if errors.Is(err, sql.ErrNoRows) {
 		return SourceState{}, false, nil
 	}
 	if err != nil {
-		return SourceState{}, false, fmt.Errorf("read source state: %w", err)
+		return SourceState{}, false, err
+	}
+	return state, true, nil
+}
+
+// SessionSourceStateByID reads only source metadata for a targeted refresh.
+func (s *Store) SessionSourceStateByID(ctx context.Context, sessionID string) (SourceState, error) {
+	state, err := scanSourceState(s.db.QueryRowContext(ctx, `
+        SELECT id, source_path, source_size, source_mtime, source_hash
+        FROM sessions WHERE id = ?`, sessionID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return SourceState{}, ErrNotFound
+	}
+	return state, err
+}
+
+func scanSourceState(row rowScanner) (SourceState, error) {
+	var state SourceState
+	var sourceTime string
+	err := row.Scan(&state.SessionID, &state.SourcePath, &state.SourceSize, &sourceTime, &state.SourceHash)
+	if err != nil {
+		return SourceState{}, fmt.Errorf("read source state: %w", err)
 	}
 	state.SourceTime, err = parseTime(sourceTime)
 	if err != nil {
-		return SourceState{}, false, fmt.Errorf("parse source mtime: %w", err)
+		return SourceState{}, fmt.Errorf("parse source mtime: %w", err)
 	}
-	return state, true, nil
+	return state, nil
 }
 
 // ImportSession atomically refreshes source metadata, normalized messages, FTS

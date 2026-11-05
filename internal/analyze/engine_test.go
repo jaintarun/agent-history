@@ -136,6 +136,10 @@ func TestLiveRecencyRefocusesOnlyRootAndCachesIt(t *testing.T) {
 	if len(requests) != 1 || requests[0].Kind != RequestSession {
 		t.Fatalf("live refocus requests = %#v", requests)
 	}
+	rootNodes, err := database.SummaryNodes(context.Background(), session.ID, "session", "fake", "test", "v1/live-root-v1", "v1")
+	if err != nil || len(rootNodes) != 1 {
+		t.Fatalf("live root provenance = %v, %v", rootNodes, err)
+	}
 	if strings.Contains(requests[0].Prompt, "Fix authentication") || strings.Contains(requests[0].Prompt, "redesign the vault") {
 		t.Fatalf("root-only prompt includes raw transcript: %s", requests[0].Prompt)
 	}

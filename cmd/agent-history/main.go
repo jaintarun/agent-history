@@ -204,6 +204,9 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 	scanDone := startScanLoop(scanContext, scanner, *scanOnStart, *scanInterval, logger, afterScan)
 	cmuxContext, stopCmux := context.WithCancel(ctx)
 	cmuxDone := cmuxReconciler.Start(cmuxContext, time.Minute)
+	liveDone := startLiveRefreshLoop(cmuxContext, database, scanner, worker, func(loadContext context.Context) (analyze.Options, bool, error) {
+		return analysisSettings(loadContext, database)
+	}, 5*time.Minute, logger)
 	if *openBrowserFlag && !*noOpen {
 		if err := openBrowser(server.URL()); err != nil {
 			logger.Warn("could not open browser", "error", err)
@@ -214,6 +217,7 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 	stopCmux()
 	<-scanDone
 	<-cmuxDone
+	<-liveDone
 	worker.Close()
 	closeErr := database.Close()
 	if serveErr != nil {

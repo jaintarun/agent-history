@@ -82,15 +82,15 @@ func (s *Scanner) Rescan(ctx context.Context, sessionID string) (store.ImportRes
 // RefreshIfChanged rereads one session only when its source file metadata has
 // changed. Its changed result reflects visible conversation, not tool records.
 func (s *Scanner) RefreshIfChanged(ctx context.Context, sessionID string) (store.ImportResult, bool, error) {
-	detail, err := s.store.GetSession(ctx, sessionID)
+	state, err := s.store.SessionSourceStateByID(ctx, sessionID)
 	if err != nil {
 		return store.ImportResult{}, false, err
 	}
-	info, err := os.Stat(detail.Session.SourcePath)
+	info, err := os.Stat(state.SourcePath)
 	if err != nil {
 		return store.ImportResult{}, false, fmt.Errorf("stat session source: %w", err)
 	}
-	if info.Size() == detail.Session.SourceSize && info.ModTime().UTC().Equal(detail.Session.SourceMTime) {
+	if info.Size() == state.SourceSize && info.ModTime().UTC().Equal(state.SourceTime) {
 		return store.ImportResult{}, false, nil
 	}
 	result, err := s.Rescan(ctx, sessionID)

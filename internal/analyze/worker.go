@@ -25,11 +25,11 @@ type Worker struct {
 	store      *store.Store
 	ctx        context.Context
 	cancel     context.CancelFunc
-	queue      chan queuedAnalysis
-	liveQueue  chan queuedAnalysis
+	queue      chan *queuedAnalysis
+	liveQueue  chan *queuedAnalysis
 	wg         sync.WaitGroup
 	mu         sync.Mutex
-	pending    map[string]bool
+	pending    map[string]*queuedAnalysis
 	liveStreak int
 }
 
@@ -38,6 +38,9 @@ type queuedAnalysis struct {
 	options   Options
 	kind      queueKind
 	done      chan error
+	live      bool
+	enqueued  bool
+	running   bool
 }
 
 type queueKind string
@@ -55,8 +58,8 @@ func NewWorker(database *store.Store, engine *Engine, queueCapacity int) *Worker
 	ctx, cancel := context.WithCancel(context.Background())
 	worker := &Worker{
 		engine: engine, store: database, ctx: ctx, cancel: cancel,
-		queue: make(chan queuedAnalysis, queueCapacity), pending: make(map[string]bool),
-		liveQueue: make(chan queuedAnalysis, queueCapacity),
+		queue: make(chan *queuedAnalysis, queueCapacity), pending: make(map[string]*queuedAnalysis),
+		liveQueue: make(chan *queuedAnalysis, queueCapacity),
 	}
 	worker.wg.Add(1)
 	go worker.run()
@@ -104,31 +107,43 @@ func (w *Worker) EnqueueRetitle(ctx context.Context, sessionID string, options O
 }
 
 func (w *Worker) enqueue(ctx context.Context, sessionID string, options Options, kind queueKind, live bool, previousStatus, previousError string) (<-chan error, error) {
+	job := &queuedAnalysis{sessionID: sessionID, options: options, kind: kind, done: make(chan error, 1), live: live}
 	w.mu.Lock()
-	if w.pending[sessionID] {
+	if existing := w.pending[sessionID]; existing != nil {
+		if live && existing.kind == queueAnalysis && !existing.live && existing.enqueued && !existing.running {
+			job.done = existing.done
+			select {
+			case w.liveQueue <- job:
+				w.pending[sessionID] = job
+				w.mu.Unlock()
+				return job.done, nil
+			default:
+				w.mu.Unlock()
+				return nil, ErrQueueFull
+			}
+		}
 		w.mu.Unlock()
 		return nil, ErrAlreadyQueued
 	}
-	w.pending[sessionID] = true
+	w.pending[sessionID] = job
 	w.mu.Unlock()
 	removePending := func() {
-		w.mu.Lock()
-		delete(w.pending, sessionID)
-		w.mu.Unlock()
+		w.removePending(job)
 	}
 	if err := w.store.SetAnalysisStatus(ctx, sessionID, "queued", ""); err != nil {
 		removePending()
 		return nil, err
 	}
-	done := make(chan error, 1)
-	job := queuedAnalysis{sessionID: sessionID, options: options, kind: kind, done: done}
 	queue := w.queue
 	if live {
 		queue = w.liveQueue
 	}
 	select {
 	case queue <- job:
-		return done, nil
+		w.mu.Lock()
+		job.enqueued = true
+		w.mu.Unlock()
+		return job.done, nil
 	case <-ctx.Done():
 		removePending()
 		_ = w.store.SetAnalysisStatus(context.WithoutCancel(ctx), sessionID, "failed", ctx.Err().Error())
@@ -159,22 +174,29 @@ func (w *Worker) run() {
 			w.drain()
 			return
 		}
+		w.mu.Lock()
+		if w.pending[job.sessionID] != job {
+			w.mu.Unlock()
+			continue
+		}
+		job.running = true
+		w.mu.Unlock()
 		var err error
 		if job.kind == queueRetitle {
 			_, err = w.engine.Retitle(w.ctx, job.sessionID, job.options)
 		} else {
 			_, err = w.engine.Analyze(w.ctx, job.sessionID, job.options)
 		}
-		w.removePending(job.sessionID)
+		w.removePending(job)
 		job.done <- err
 		close(job.done)
 	}
 }
 
-func (w *Worker) next() (queuedAnalysis, bool) {
+func (w *Worker) next() (*queuedAnalysis, bool) {
 	select {
 	case <-w.ctx.Done():
-		return queuedAnalysis{}, false
+		return nil, false
 	default:
 	}
 	if w.liveStreak >= 3 {
@@ -193,7 +215,7 @@ func (w *Worker) next() (queuedAnalysis, bool) {
 	}
 	select {
 	case <-w.ctx.Done():
-		return queuedAnalysis{}, false
+		return nil, false
 	case job := <-w.liveQueue:
 		w.liveStreak++
 		return job, true
@@ -207,21 +229,32 @@ func (w *Worker) drain() {
 	for {
 		select {
 		case job := <-w.liveQueue:
-			w.removePending(job.sessionID)
-			job.done <- context.Canceled
-			close(job.done)
+			w.cancelPending(job)
 		case job := <-w.queue:
-			w.removePending(job.sessionID)
-			job.done <- context.Canceled
-			close(job.done)
+			w.cancelPending(job)
 		default:
 			return
 		}
 	}
 }
 
-func (w *Worker) removePending(sessionID string) {
+func (w *Worker) removePending(job *queuedAnalysis) {
 	w.mu.Lock()
-	delete(w.pending, sessionID)
+	if w.pending[job.sessionID] == job {
+		delete(w.pending, job.sessionID)
+	}
 	w.mu.Unlock()
+}
+
+func (w *Worker) cancelPending(job *queuedAnalysis) {
+	w.mu.Lock()
+	current := w.pending[job.sessionID] == job
+	if current {
+		delete(w.pending, job.sessionID)
+	}
+	w.mu.Unlock()
+	if current {
+		job.done <- context.Canceled
+		close(job.done)
+	}
 }
