@@ -39,6 +39,7 @@ type Options struct {
 	LeafTargetChars   int
 	RollupFanout      int
 	Full              bool
+	LiveRecency       bool
 }
 
 // Result reports the persisted analysis plus model-input accounting.

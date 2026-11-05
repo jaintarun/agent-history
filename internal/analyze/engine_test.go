@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -111,6 +112,112 @@ func TestEnginePromotesSingleLeafWithoutRedundantModelCalls(t *testing.T) {
 	}
 	if len(detail.Segments) != 1 || nodeCount != 3 {
 		t.Fatalf("persisted segments/nodes = %d/%d", len(detail.Segments), nodeCount)
+	}
+}
+
+func TestLiveRecencyRefocusesOnlyRootAndCachesIt(t *testing.T) {
+	database, session := analysisFixture(t)
+	fake := &fakeAnalyzer{}
+	engine := NewEngine(database, map[string]Analyzer{"fake": fake})
+	options := Options{Provider: "fake", Model: "test", PromptVersion: "v1", NormalizerVersion: "v1", LeafTargetChars: 10_000, RollupFanout: 8}
+	if _, err := engine.Analyze(context.Background(), session.ID, options); err != nil {
+		t.Fatal(err)
+	}
+	fake.reset()
+	options.LiveRecency = true
+	result, err := engine.Analyze(context.Background(), session.ID, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Calls != 1 {
+		t.Fatalf("first live refocus calls = %d, want 1", result.Calls)
+	}
+	requests := fake.requestsCopy()
+	if len(requests) != 1 || requests[0].Kind != RequestSession {
+		t.Fatalf("live refocus requests = %#v", requests)
+	}
+	if strings.Contains(requests[0].Prompt, "Fix authentication") || strings.Contains(requests[0].Prompt, "redesign the vault") {
+		t.Fatalf("root-only prompt includes raw transcript: %s", requests[0].Prompt)
+	}
+	fake.reset()
+	result, err = engine.Analyze(context.Background(), session.ID, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Calls != 0 {
+		t.Fatalf("repeat live refocus calls = %d, want 0", result.Calls)
+	}
+}
+
+func TestLiveSessionPromptOrdersNewestTopicsAndBoundsOlderContext(t *testing.T) {
+	var topics []TopicResult
+	for i := 0; i < 20; i++ {
+		topics = append(topics, TopicResult{Title: fmt.Sprintf("Topic-%02d", i), Summary: strings.Repeat("older context ", 100)})
+	}
+	prompt := liveSessionPrompt(topics, nil)
+	if strings.Index(prompt, "Topic-19") > strings.Index(prompt, "Topic-18") {
+		t.Fatalf("newest topic not first: %s", prompt)
+	}
+	if len(prompt) > 6500 {
+		t.Fatalf("live prompt length = %d, want bounded", len(prompt))
+	}
+	if !strings.Contains(prompt, "Topic-19") || !strings.Contains(prompt, "Topic-00") {
+		t.Fatalf("live prompt omitted newest or historical context: %s", prompt)
+	}
+}
+
+func TestLiveRecencySingleTopicUsesRecentLeafSummaries(t *testing.T) {
+	database, session := analysisFixture(t)
+	messages := analysisMessages()[:2]
+	session.SourceHash = "single-topic"
+	session.LastActiveAt = messages[len(messages)-1].Timestamp
+	if _, err := database.ImportSession(context.Background(), session, messages); err != nil {
+		t.Fatal(err)
+	}
+	fake := &fakeAnalyzer{}
+	engine := NewEngine(database, map[string]Analyzer{"fake": fake})
+	options := Options{Provider: "fake", Model: "test", PromptVersion: "v1", NormalizerVersion: "v1", LeafTargetChars: 48_000, RollupFanout: 8}
+	if _, err := engine.Analyze(context.Background(), session.ID, options); err != nil {
+		t.Fatal(err)
+	}
+	fake.reset()
+	options.LiveRecency = true
+	result, err := engine.Analyze(context.Background(), session.ID, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Calls != 1 {
+		t.Fatalf("one-topic live refocus calls = %d, want 1", result.Calls)
+	}
+	if prompt := fake.requestsCopy()[0].Prompt; !strings.Contains(prompt, "recent_leaf_summaries") || !strings.Contains(prompt, "Implemented one bounded part") {
+		t.Fatalf("one-topic live prompt lacks leaf context: %s", prompt)
+	}
+}
+
+func TestLiveRecencyFailurePreservesVisibleMetadata(t *testing.T) {
+	database, session := analysisFixture(t)
+	fake := &fakeAnalyzer{}
+	engine := NewEngine(database, map[string]Analyzer{"fake": fake})
+	options := Options{Provider: "fake", Model: "test", PromptVersion: "v1", NormalizerVersion: "v1", LeafTargetChars: 10_000, RollupFanout: 8}
+	if _, err := engine.Analyze(context.Background(), session.ID, options); err != nil {
+		t.Fatal(err)
+	}
+	before, err := database.GetSession(context.Background(), session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake.reset()
+	fake.responses = map[RequestKind]json.RawMessage{RequestSession: json.RawMessage(`{"title":"","summary":""}`)}
+	options.LiveRecency = true
+	if _, err := engine.Analyze(context.Background(), session.ID, options); err == nil {
+		t.Fatal("invalid live root succeeded")
+	}
+	after, err := database.GetSession(context.Background(), session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Session.Title != before.Session.Title || after.Session.Summary != before.Session.Summary || after.Session.AnalysisStatus != "failed" {
+		t.Fatalf("failed live refocus changed visible metadata: before=%#v after=%#v", before.Session, after.Session)
 	}
 }
 

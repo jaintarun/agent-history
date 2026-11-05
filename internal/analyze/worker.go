@@ -86,6 +86,7 @@ func (w *Worker) EnqueueLive(ctx context.Context, sessionID string, options Opti
 	if len(detail.Messages) == 0 {
 		return nil, ErrNoVisibleMessages
 	}
+	options.LiveRecency = true
 	return w.enqueue(ctx, sessionID, options, queueAnalysis, true, detail.Session.AnalysisStatus, detail.Session.AnalysisError)
 }
 
